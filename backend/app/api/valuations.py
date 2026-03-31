@@ -1,1 +1,3 @@
-# /api/valuations — get/trigger valuation for a stock
+from flask import Blueprint
+
+valuations_bp = Blueprint('valuations', __name__)

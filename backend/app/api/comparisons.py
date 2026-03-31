@@ -1,1 +1,3 @@
-# /api/comparisons — peer comparison by sector
+from flask import Blueprint
+
+comparisons_bp = Blueprint('comparisons', __name__)

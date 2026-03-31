@@ -1,1 +1,3 @@
-# /api/sectors — list sectors, sector detail with peer stocks
+from flask import Blueprint
+
+sectors_bp = Blueprint('sectors', __name__)
