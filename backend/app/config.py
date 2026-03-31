@@ -15,6 +15,7 @@ class DevelopmentConfig(Config):
 
 class TestingConfig(Config):
     TESTING = True
+    # In-memory SQLite for tests only — fast, disposable, never touches the real DB
     SQLALCHEMY_DATABASE_URI = 'sqlite:///:memory:'
 
 

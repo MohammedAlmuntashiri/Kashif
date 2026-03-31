@@ -14,6 +14,9 @@ def create_app(config_name=None):
     db.init_app(app)
     migrate.init_app(app, db)
 
+    # Import models so Alembic can detect them when generating migrations
+    from . import models  # noqa: F401
+
     from .api import register_blueprints
     register_blueprints(app)
 
