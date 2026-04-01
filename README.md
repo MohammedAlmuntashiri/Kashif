@@ -12,19 +12,29 @@ Kashif helps individual investors analyze Saudi stock market (Tadawul) companies
 - **Backend:** Flask + SQLAlchemy + Flask-Migrate + PostgreSQL
 - **Frontend:** React + Tailwind CSS
 
-## Setup
+## Quick Start (Docker)
 
 ```bash
-# Start PostgreSQL
-docker-compose up -d
+git clone <repo>
+cd Kashif
+docker-compose up
+```
+
+That's it. Open http://localhost:5000
+
+## Local Development (without Docker)
+
+```bash
+# Start PostgreSQL (install it first)
+# Create a database and user
 
 # Backend
 cd backend
 python -m venv venv
 source venv/bin/activate  # or venv\Scripts\activate on Windows
 pip install -r requirements.txt
+cp ../.env.example .env   # then edit .env with your DB credentials
 flask db upgrade
-python seed.py
 flask run
 
 # Frontend
