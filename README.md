@@ -11,6 +11,7 @@ Kashif helps individual investors analyze Saudi stock market (Tadawul) companies
 
 - **Backend:** Flask + SQLAlchemy + Flask-Migrate + PostgreSQL
 - **Frontend:** React + Tailwind CSS
+- **DevOps:** Docker + Docker Compose
 
 ## Quick Start (Docker)
 
@@ -33,7 +34,7 @@ cd backend
 python -m venv venv
 source venv/bin/activate  # or venv\Scripts\activate on Windows
 pip install -r requirements.txt
-cp ../.env.example .env   # then edit .env with your DB credentials
+cp .env.example .env   # then edit .env with your DB credentials (in project root)
 flask db upgrade
 flask run
 
