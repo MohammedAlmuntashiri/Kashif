@@ -25,6 +25,9 @@ frontend/build/
 *.swp
 *.swo
 
+# Personal notes
+.tools.md
+
 # OS
 .DS_Store
 Thumbs.db
