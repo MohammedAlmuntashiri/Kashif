@@ -36,11 +36,11 @@ def pe_fair_value(eps, sector_pe):
     return eps * sector_pe
 
 
-def get_sector_average_pe(sector_id, max_pe=MAX_REASONABLE_PE):
+def get_sector_average_pe(sector_id, max_pe=MAX_REASONABLE_PE, exclude_stock_id=None):
     """Calculate average P/E for a sector using latest annual EPS from DB.
 
     Steps:
-        1. Fetch all stocks in the sector
+        1. Fetch all stocks in the sector (optionally excluding one)
         2. For each stock, get its most recent financial_data row
         3. Compute P/E = market_price / eps
         4. Filter: EPS must be positive AND P/E ≤ max_pe (outlier protection)
@@ -49,9 +49,12 @@ def get_sector_average_pe(sector_id, max_pe=MAX_REASONABLE_PE):
     Args:
         sector_id: ID from the sectors table
         max_pe: Upper cap for individual P/E inclusion (default 50)
+        exclude_stock_id: If set, skip this stock when averaging. Pass the
+            stock's own ID during valuation to avoid self-comparison
+            (otherwise eps × (mp/eps) = mp — fair value trivially = market price).
 
     Returns:
-        Average P/E (float), or None if no valid stocks in sector.
+        Average P/E (float), or None if no valid peer stocks remain.
     """
     stocks = Stock.query.filter_by(sector_id=sector_id).all()
     if not stocks:
@@ -59,6 +62,8 @@ def get_sector_average_pe(sector_id, max_pe=MAX_REASONABLE_PE):
 
     ratios = []
     for stock in stocks:
+        if exclude_stock_id is not None and stock.id == exclude_stock_id:
+            continue
         if not stock.market_price or stock.market_price <= 0:
             continue
 

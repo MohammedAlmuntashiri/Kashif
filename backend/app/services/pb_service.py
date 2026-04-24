@@ -42,11 +42,11 @@ def pb_fair_value(equity, shares_outstanding, sector_pb):
     return book_value_per_share * sector_pb
 
 
-def get_sector_average_pb(sector_id, max_pb=MAX_REASONABLE_PB):
+def get_sector_average_pb(sector_id, max_pb=MAX_REASONABLE_PB, exclude_stock_id=None):
     """Calculate average P/B for a sector using latest equity + shares from DB.
 
     Steps:
-        1. Fetch all stocks in the sector
+        1. Fetch all stocks in the sector (optionally excluding one)
         2. For each stock, get its most recent financial_data row
         3. Compute P/B = market_price / (equity / shares)
         4. Filter: equity and shares must be positive AND P/B ≤ max_pb
@@ -55,9 +55,12 @@ def get_sector_average_pb(sector_id, max_pb=MAX_REASONABLE_PB):
     Args:
         sector_id: ID from the sectors table
         max_pb: Upper cap for individual P/B inclusion (default 20)
+        exclude_stock_id: If set, skip this stock when averaging. Pass the
+            stock's own ID during valuation to avoid self-comparison
+            (otherwise bvps × (mp/bvps) = mp — fair value trivially = market price).
 
     Returns:
-        Average P/B (float), or None if no valid stocks in sector.
+        Average P/B (float), or None if no valid peer stocks remain.
     """
     stocks = Stock.query.filter_by(sector_id=sector_id).all()
     if not stocks:
@@ -65,6 +68,8 @@ def get_sector_average_pb(sector_id, max_pb=MAX_REASONABLE_PB):
 
     ratios = []
     for stock in stocks:
+        if exclude_stock_id is not None and stock.id == exclude_stock_id:
+            continue
         if not stock.market_price or stock.market_price <= 0:
             continue
 
