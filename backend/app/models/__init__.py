@@ -4,3 +4,4 @@ from .sector import Sector
 from .stock import Stock
 from .financial_data import FinancialData
 from .valuation import Valuation
+from .comparison import Comparison
