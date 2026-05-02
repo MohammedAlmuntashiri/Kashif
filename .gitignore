@@ -34,3 +34,6 @@ Thumbs.db
 
 # PostgreSQL
 pgdata/
+
+# PDF test fixtures — download separately, see backend/test_pdfs/SOURCES.md
+backend/test_pdfs/*.pdf
