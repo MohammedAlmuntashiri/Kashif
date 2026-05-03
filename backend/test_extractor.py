@@ -11,9 +11,14 @@
 # ignored here because the PDF can't agree with a year it doesn't cover.
 #
 # Usage:
-#     python test_extractor.py                 # tests all 10 values
+#     python test_extractor.py                 # tests all 10 values, EN only
 #     python test_extractor.py revenue         # tests only revenue
 #     python test_extractor.py revenue eps     # tests revenue + eps
+#     python test_extractor.py --with-ar       # also extract Arabic PDFs
+#
+# Arabic is skipped by default since the OCR pipeline can't reliably read
+# image-rendered Arabic financial-statement pages — those are deferred to
+# the Mistral fallback in Phase 5 Part 13. Skipping AR halves runtime.
 #
 # Tolerances:
 #     Currency-like values  ±5%   (revenue, net_income, total_assets, etc.)
@@ -34,13 +39,17 @@ from app.services.pdf_extractor import extract_all
 PDF_DIR = os.path.join(os.path.dirname(__file__), 'test_pdfs')
 TEST_PERIOD = "2024-annual"
 
-# 5 companies × 2 languages → 10 PDFs
+# 6 companies × 2 languages → 12 PDFs.
+# 2280 (Almarai) is the out-of-sample anchor — kept here so every regression
+# run validates against a company we did NOT use to tune keyword lists.
 TEST_FILES = {
     "2222": ("2222_aramco_2024_annual_en.pdf",   "2222_aramco_2024_annual_ar.pdf"),
     "1120": ("1120_alrajhi_2024_annual_en.pdf",  "1120_alrajhi_2024_annual_ar.pdf"),
     "2010": ("2010_sabic_2024_annual_en.pdf",    "2010_sabic_2024_annual_ar.pdf"),
     "4190": ("4190_jarir_2024_annual_en.pdf",    "4190_jarir_2024_annual_ar.pdf"),
     "7010": ("7010_stc_2024_annual_en.pdf",      "7010_stc_2024_annual_ar.pdf"),
+    "2280": ("2280_almarai_2024_annual_en.pdf",  "2280_almarai_2024_annual_ar.pdf"),
+    "7030": ("7030_zain_2024_annual_en.pdf",     "7030_zain_2024_annual_ar.pdf"),
 }
 
 # Per-value tolerance as a relative fraction (0.05 = 5%).
@@ -77,8 +86,10 @@ def _fmt(v):
     return f"{v:>15,.4f}"
 
 
-def run_tests(values_to_test):
-    """Extract all 10 PDFs, report accuracy for the requested values only."""
+def run_tests(values_to_test, *, with_ar=False):
+    """Extract test PDFs and report accuracy for the requested values only.
+    By default only English PDFs are extracted; pass with_ar=True to include
+    Arabic (slow due to OCR and currently unreliable — see module docstring)."""
     app = create_app()
     with app.app_context():
         # Pull 2024 financial_data row for each test company
@@ -99,7 +110,8 @@ def run_tests(values_to_test):
         results = {v: {} for v in values_to_test}
 
         for sym, (en, ar) in TEST_FILES.items():
-            for fname in (en, ar):
+            files = (en, ar) if with_ar else (en,)
+            for fname in files:
                 path = os.path.join(PDF_DIR, fname)
                 print(f"  extracting {fname} ...", flush=True)
                 extracted = extract_all(path)
@@ -142,10 +154,13 @@ def run_tests(values_to_test):
 
 
 if __name__ == "__main__":
-    values = sys.argv[1:] if len(sys.argv) > 1 else ALL_VALUES
+    args = sys.argv[1:]
+    with_ar = "--with-ar" in args
+    args = [a for a in args if a != "--with-ar"]
+    values = args if args else ALL_VALUES
     invalid = [v for v in values if v not in ALL_VALUES]
     if invalid:
         print(f"Unknown value name(s): {invalid}")
         print(f"Valid: {ALL_VALUES}")
         sys.exit(1)
-    run_tests(values)
+    run_tests(values, with_ar=with_ar)

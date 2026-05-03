@@ -88,10 +88,11 @@ KEYWORDS = {
         "Total operating income", "Net financing income",
         "إجمالي الدخل التشغيلي", "صافي دخل التمويل", "الدخل التشغيلي",
     ],
-    "net_income": [
-        "Net income", "Net profit", "Profit for the year", "Net earnings",
-        "صافي الدخل", "صافي الربح", "ربح السنة",
-    ],
+    # net_income is split into attribution + total constants below the
+    # KEYWORDS dict (extract_net_income runs them in stages). Leaving an
+    # empty placeholder here so the dict still has the key for callers
+    # that introspect KEYWORDS.
+    "net_income": [],
     "eps": [
         "Basic earnings per share", "Earnings per share", "EPS", "Basic EPS",
         "ربحية السهم الأساسية", "ربحية السهم", "العائد على السهم",
@@ -130,6 +131,60 @@ KEYWORDS = {
 # Auto-add reversed-form Arabic variants so we match either pdfplumber's
 # visual-order extraction or Tesseract's logical-order output.
 KEYWORDS = {k: _expand_arabic(v) for k, v in KEYWORDS.items()}
+
+
+# ── Net income: attribution vs consolidated total ───────────────
+# yfinance reports parent-attributable net income (excluding minority
+# interests). Most Saudi annual reports show two values:
+#   1. Consolidated total                       e.g. "Net income"
+#   2. Attributable to equity holders of parent e.g. "• Equity holders ..."
+# We try (1) attribution-with-anchor, (2) attribution-without-anchor (for
+# multi-column layouts pdfplumber flattens), then (3) the consolidated
+# total as a fallback. See extract_net_income for the orchestration.
+#
+# Each company labels the parent differently — Saudi banks say "of the
+# Bank", others "of the Parent", "of the Parent Company", or "of the
+# Company". STC + SABIC's 2024 statements show *two* attribution lines
+# (continuing-ops attribution first, total attribution second), so the
+# matcher uses last-match semantics for these keywords.
+NET_INCOME_ATTRIBUTION_KEYWORDS = _expand_arabic([
+    "Net income attributable to equity holders of the parent",
+    "Net income attributable to shareholders of the parent",
+    "Net profit attributable to equity holders of the parent",
+    "Net profit attributable to shareholders of the parent",
+    "Profit attributable to equity holders of the parent",
+    "Profit attributable to shareholders of the parent",
+    "Equity holders of the Parent Company",
+    "Equity holders of the parent",
+    "Equity holders of the Bank",
+    "Equity holders of the Company",
+    "Shareholders of the Parent Company",
+    "Shareholders of the parent",
+    "Shareholders of the Bank",
+    "Shareholders of the Company",
+    # Arabic
+    "العائد إلى مساهمي الشركة الأم",
+    "العائد لمساهمي الشركة الأم",
+    "العائد لمساهمي البنك",
+    "صافي الدخل العائد إلى مساهمي الشركة الأم",
+    "صافي الربح العائد إلى مساهمي الشركة الأم",
+    "حصة مساهمي الشركة الأم",
+    "حصة مساهمي البنك",
+    "مساهمي الشركة الأم",
+])
+NET_INCOME_TOTAL_KEYWORDS = _expand_arabic([
+    "Profit for the year", "Net profit", "Net income", "Net earnings",
+    "صافي الدخل", "صافي الربح", "ربح السنة", "ربح العام",
+])
+# Lines mentioning these qualifiers are NOT the consolidated total —
+# Al Rajhi's "Net income for the year before Zakat" is 21.97B vs the
+# real 19.73B post-zakat figure on the next line.
+NET_INCOME_TOTAL_DISQUALIFIERS = [
+    re.compile(r"before\s+zakat", re.I),
+    re.compile(r"before\s+(?:income\s+)?tax", re.I),
+    re.compile(r"قبل\s+الزكاة"),
+    re.compile(r"قبل\s+الضريبة"),
+]
 
 
 # ── Unit detection ──────────────────────────────────────────────
@@ -234,25 +289,41 @@ def _pages_matching_patterns(pages, patterns):
 
 # ── Keyword-based value lookup ──────────────────────────────────
 
-def _value_near_keyword(text, keywords):
-    """Find the first plausible number on a line where the keyword appears
-    near the start (financial-statement row layout), not buried in prose.
+def _value_near_keyword(text, keywords, *, anchor_start=True, last=False, exclude=()):
+    """Find a plausible number on a line where the keyword appears.
 
-    "Near the start" = within the first 6 chars of the stripped line. This
-    filters out narrative mentions like "applied to revenue recognition..."
-    while still allowing tabular rows where a leading note number ("3.")
-    or bullet may precede the label.
+    "Near the start" (anchor_start=True) = within the first 6 chars of the
+    stripped line. Filters narrative mentions ("applied to revenue
+    recognition...") while allowing leading note numbers / bullets.
+
+    anchor_start=False drops that constraint — needed when pdfplumber
+    flattens multi-column layouts and a tabular row ends up mid-line.
+    Use only with phrases specific enough that mid-line matches are safe
+    (e.g. "Equity holders of the parent").
+
+    last=True returns the LAST plausible match per keyword instead of the
+    first. Used for net-income attribution where statements with both
+    continuing-ops and total sub-lines list them in that order; yfinance
+    reports the second.
+
+    exclude is a list of compiled regexes; matching lines are skipped.
 
     Plausible number = not a year (2010-2099), not tiny (|n| < 100, which
-    rules out page references and footnote markers).
+    rules out page references and footnote markers). Negatives "(1,234)"
+    and "-1,234" are parsed as signed by NUMBER_RE + _parse_number.
     """
     for kw in keywords:
         kw_lower = kw.lower()
+        candidate = None
         for line in text.splitlines():
             stripped = line.strip()
+            if exclude and any(p.search(stripped) for p in exclude):
+                continue
             stripped_lower = stripped.lower()
             pos = stripped_lower.find(kw_lower)
-            if pos < 0 or pos > 6:
+            if pos < 0:
+                continue
+            if anchor_start and pos > 6:
                 continue
             after = stripped[pos + len(kw):]
             for m in NUMBER_RE.finditer(after):
@@ -263,15 +334,21 @@ def _value_near_keyword(text, keywords):
                     continue  # year column header
                 if abs(n) < 100:
                     continue  # page ref / footnote
-                return n
+                if not last:
+                    return n
+                candidate = n
+                break  # first plausible number on this line is the row's value
+        if candidate is not None:
+            return candidate
     return None
 
 
-def _extract_in_pages(pages_subset, keywords):
+def _extract_in_pages(pages_subset, keywords, **kwargs):
     """Run _value_near_keyword across a list of pages; first hit wins.
-    Applies unit detection on the page where the match was found."""
+    Applies unit detection on the page where the match was found.
+    kwargs (anchor_start, last, exclude) are forwarded to _value_near_keyword."""
     for _, text in pages_subset:
-        n = _value_near_keyword(text, keywords)
+        n = _value_near_keyword(text, keywords, **kwargs)
         if n is not None:
             return n * _detect_unit(text)
     return None
@@ -336,7 +413,38 @@ def extract_revenue(pages):
     income_pages = _pages_matching_patterns(pages, INCOME_STATEMENT_PATTERNS)
     return (_extract_in_pages(income_pages, keywords)
             or _extract_in_pages(pages, keywords))
-def extract_net_income(pages):           return None
+def extract_net_income(pages):
+    """Find net income, preferring parent-attributable when reported.
+
+    Per subset (income-statement pages first, then whole doc), run three
+    stages and return the first hit:
+      1. Attribution keywords with start-of-line anchor + LAST match.
+         Last-match handles 2024 statements (STC, SABIC) that show both
+         continuing-ops attribution and total attribution; yfinance reports
+         the latter, which appears later in the statement.
+      2. Same attribution keywords WITHOUT the start-of-line anchor.
+         pdfplumber flattens SABIC's two-column income statement so the
+         attribution row ends up mid-line.
+      3. Fallback to consolidated-total keywords with disqualifiers for
+         "before zakat / before tax" pseudo-totals (Al Rajhi shows the
+         pre-zakat line first; we want the post-zakat one).
+
+    Negatives are handled implicitly by NUMBER_RE + _parse_number — a
+    full-year loss in "(1,234)" parens is returned as -1,234.
+    """
+    income_pages = _pages_matching_patterns(pages, INCOME_STATEMENT_PATTERNS)
+    stages = [
+        (NET_INCOME_ATTRIBUTION_KEYWORDS, dict(last=True, anchor_start=True)),
+        (NET_INCOME_ATTRIBUTION_KEYWORDS, dict(last=True, anchor_start=False)),
+        (NET_INCOME_TOTAL_KEYWORDS,
+         dict(last=False, anchor_start=True, exclude=NET_INCOME_TOTAL_DISQUALIFIERS)),
+    ]
+    for subset in (income_pages, pages):
+        for keywords, kwargs in stages:
+            n = _extract_in_pages(subset, keywords, **kwargs)
+            if n is not None:
+                return n
+    return None
 def extract_eps(pages):                  return None
 def extract_total_assets(pages):         return None
 def extract_shareholders_equity(pages):  return None
