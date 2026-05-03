@@ -29,14 +29,64 @@
 import re
 import pdfplumber
 
+# OCR fallback for image-based pages. Many Tadawul annual reports embed the
+# financial statements section as images while the rest of the document is
+# real text. Detect "empty" pages and OCR them with Tesseract (eng + ara).
+import pytesseract
+from pdf2image import convert_from_path
+
+# Pages with fewer than this many extracted characters are treated as
+# image-only and routed through OCR. Tuned from observation: real text
+# pages had 1000+ chars, image pages returned 0–50.
+TEXT_THRESHOLD_CHARS = 50
+
+# pdf2image uses Poppler to rasterize. Higher DPI = better OCR but slower.
+# 200 is a common sweet spot for printed financial statements.
+OCR_DPI = 200
+
+# tesseract languages: English + Arabic. The "+" tells Tesseract to load both.
+OCR_LANGS = "eng+ara"
+
 
 # ── Keyword lists per value (English + Arabic) ──────────────────
 # Each list is searched in order; first hit wins. Add variations as we
 # encounter them in real PDFs. Match is case-insensitive.
+#
+# Arabic note: pdfplumber returns Arabic text in *visual* (RTL-reversed)
+# order, while Tesseract OCR returns it in *logical* order. The keywords
+# below are written in logical order; _expand_arabic() generates a
+# character-reversed twin for each so we match either source.
+ARABIC_RANGE = ("؀", "ۿ")  # Arabic Unicode block
+
+
+def _is_arabic(s):
+    return any(ARABIC_RANGE[0] <= c <= ARABIC_RANGE[1] for c in s)
+
+
+def _expand_arabic(keywords):
+    """Return original list plus a character-reversed copy of each Arabic
+    entry (for matching against pdfplumber's visual-order extraction)."""
+    out = list(keywords)
+    for kw in keywords:
+        if _is_arabic(kw):
+            rev = kw[::-1]
+            if rev not in out:
+                out.append(rev)
+    return out
+
+
 KEYWORDS = {
     "revenue": [
-        "Total revenue", "Revenue", "Net sales", "Total sales",
-        "إجمالي الإيرادات", "الإيرادات", "صافي المبيعات",
+        # Aramco-style: matches the broader yfinance "Total Revenue" definition
+        # (must come BEFORE "Revenue" since both lines appear and substring matches "Revenue").
+        "Revenue and other income related to sales",
+        # Industrial / consumer / telecom / energy
+        "Total revenue", "Revenue", "Revenues", "Net sales", "Total sales",
+        "إجمالي الإيرادات", "الإيرادات", "إيرادات", "الايرادات", "ايرادات",
+        "صافي المبيعات", "المبيعات",
+        # Banks (no "revenue" line — total operating income is the analog)
+        "Total operating income", "Net financing income",
+        "إجمالي الدخل التشغيلي", "صافي دخل التمويل", "الدخل التشغيلي",
     ],
     "net_income": [
         "Net income", "Net profit", "Profit for the year", "Net earnings",
@@ -77,13 +127,41 @@ KEYWORDS = {
     ],
 }
 
+# Auto-add reversed-form Arabic variants so we match either pdfplumber's
+# visual-order extraction or Tesseract's logical-order output.
+KEYWORDS = {k: _expand_arabic(v) for k, v in KEYWORDS.items()}
+
 
 # ── Unit detection ──────────────────────────────────────────────
-# Many Saudi annual reports state values in millions or thousands of SAR.
-# Patterns are checked in order; first match wins. If none match, return 1.
+# Match a unit hint only when it appears in a recognisable declaration
+# context, not in narrative prose ("impairment of SR 1,387 million" should
+# NOT pull millions for the whole page).
+#
+# Variants we've seen across the 5 test companies:
+#   SABIC:    "All amounts in thousands of Saudi Riyals"
+#   Aramco:   "All amounts in millions of Saudi Riyals"
+#   STC:      "All Amounts in Saudi Riyals Thousands"
+#   Al Rajhi: "(SAR'000)"
+#
+# Each pattern requires a currency anchor (Saudi Riyals / SAR / SR /
+# الريالات / ريال) close to the unit word, except for the apostrophe form.
 UNIT_PATTERNS = [
-    (re.compile(r"in\s+millions|بالملايين|ملايين\s+الريالات", re.I), 1_000_000),
-    (re.compile(r"in\s+thousands|بالآلاف|آلاف\s+الريالات", re.I), 1_000),
+    # SAR'000  /  SR ' 000  (apostrophe = thousands, "Mn" = millions)
+    (re.compile(r"(?:SAR|SR)\s*['’‘′ʼ`]\s*000", re.I), 1_000),
+    (re.compile(r"(?:SAR|SR)\s*['’‘′ʼ`]\s*0{6}", re.I), 1_000_000),
+    (re.compile(r"(?:SAR|SR)\s*['’‘′ʼ`]\s*[Mm]n?\b", re.I), 1_000_000),
+    # "in millions/thousands of Saudi Riyals|SAR|SR"
+    (re.compile(r"\bin\s+millions?\s+of\s+(?:Saudi\s+Riyals?|SAR|SR)\b", re.I), 1_000_000),
+    (re.compile(r"\bin\s+thousands?\s+of\s+(?:Saudi\s+Riyals?|SAR|SR)\b", re.I), 1_000),
+    # "Saudi Riyals millions/thousands" (STC's reversed phrasing)
+    (re.compile(r"\b(?:Saudi\s+Riyals?|SAR|SR)\s+millions?\b", re.I), 1_000_000),
+    (re.compile(r"\b(?:Saudi\s+Riyals?|SAR|SR)\s+thousands?\b", re.I), 1_000),
+    # Parenthesised "(in millions)" or "(in thousands)" — last-resort English
+    (re.compile(r"\(\s*in\s+millions?\s*\)", re.I), 1_000_000),
+    (re.compile(r"\(\s*in\s+thousands?\s*\)", re.I), 1_000),
+    # Arabic: standalone unit words are typically declarative on a header line
+    (re.compile(r"بالملايين|ملايين\s+الريالات|ملايين\s+ريال"), 1_000_000),
+    (re.compile(r"بالآلاف|آلاف\s+الريالات|آلاف\s+ريال"), 1_000),
 ]
 
 
@@ -117,20 +195,147 @@ def _parse_number(s):
         return None
 
 
-# ── Page extraction ─────────────────────────────────────────────
+# ── Income statement detection ──────────────────────────────────
+# The income statement (a.k.a. statement of profit or loss) is the
+# authoritative place for revenue and net income. Searching here first
+# avoids the highlights/summary tables which sometimes restate or round.
+#
+# Patterns are regexes (not literals) because OCR introduces missing or
+# extra whitespace — e.g. "PROFIT OR LOSS" came back as "PROFIT ORLOSS"
+# from Tesseract. \s* tolerates that. Arabic patterns are matched in both
+# logical and reversed (visual) form via _expand_arabic.
+_HEADER_PATTERN_STRINGS = [
+    r"statement\s+of\s+profit\s*or\s*loss",
+    r"statement\s+of\s+income",
+    r"income\s+statement",
+    r"statement\s+of\s+comprehensive\s+income",
+    "قائمة الدخل",
+    "قائمة الأرباح والخسائر",
+    "قائمة الربح أو الخسارة",
+    "قائمة الربح والخسارة",
+    "قائمة الدخل الشامل",
+    "قائمة الدخل الموحدة",
+]
+_HEADER_PATTERN_STRINGS = _expand_arabic(_HEADER_PATTERN_STRINGS)
+INCOME_STATEMENT_PATTERNS = [re.compile(p, re.I) for p in _HEADER_PATTERN_STRINGS]
+
+
+def _pages_matching_patterns(pages, patterns):
+    """Return the subset of pages whose text matches any of the given regexes."""
+    matches = []
+    for page in pages:
+        _, text = page
+        for pat in patterns:
+            if pat.search(text):
+                matches.append(page)
+                break
+    return matches
+
+
+# ── Keyword-based value lookup ──────────────────────────────────
+
+def _value_near_keyword(text, keywords):
+    """Find the first plausible number on a line where the keyword appears
+    near the start (financial-statement row layout), not buried in prose.
+
+    "Near the start" = within the first 6 chars of the stripped line. This
+    filters out narrative mentions like "applied to revenue recognition..."
+    while still allowing tabular rows where a leading note number ("3.")
+    or bullet may precede the label.
+
+    Plausible number = not a year (2010-2099), not tiny (|n| < 100, which
+    rules out page references and footnote markers).
+    """
+    for kw in keywords:
+        kw_lower = kw.lower()
+        for line in text.splitlines():
+            stripped = line.strip()
+            stripped_lower = stripped.lower()
+            pos = stripped_lower.find(kw_lower)
+            if pos < 0 or pos > 6:
+                continue
+            after = stripped[pos + len(kw):]
+            for m in NUMBER_RE.finditer(after):
+                n = _parse_number(m.group(0))
+                if n is None:
+                    continue
+                if 2010 <= n <= 2099 and n == int(n):
+                    continue  # year column header
+                if abs(n) < 100:
+                    continue  # page ref / footnote
+                return n
+    return None
+
+
+def _extract_in_pages(pages_subset, keywords):
+    """Run _value_near_keyword across a list of pages; first hit wins.
+    Applies unit detection on the page where the match was found."""
+    for _, text in pages_subset:
+        n = _value_near_keyword(text, keywords)
+        if n is not None:
+            return n * _detect_unit(text)
+    return None
+
+
+# ── Page extraction (text first, OCR fallback) ──────────────────
+
+def _ocr_pages(pdf_path, page_numbers):
+    """OCR the specified 1-based page numbers, returns dict {page_num: text}.
+
+    pdf2image rasterizes each requested page individually (first_page/last_page)
+    so we don't pay the cost for pages that already had real text.
+    """
+    out = {}
+    for pn in page_numbers:
+        images = convert_from_path(pdf_path, dpi=OCR_DPI, first_page=pn, last_page=pn)
+        if not images:
+            out[pn] = ""
+            continue
+        out[pn] = pytesseract.image_to_string(images[0], lang=OCR_LANGS)
+    return out
+
 
 def _extract_text(pdf_path):
-    """Return [(page_num, text), ...] with 1-based page numbers."""
+    """Return [(page_num, text), ...] with 1-based page numbers.
+
+    Pages where pdfplumber finds < TEXT_THRESHOLD_CHARS are OCR'd, since
+    most "empty" pages in our test set are the image-rendered financial
+    statements (which is exactly what we need to read).
+    """
     pages = []
+    image_page_nums = []
     with pdfplumber.open(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
-            pages.append((i, page.extract_text() or ""))
+            text = page.extract_text() or ""
+            if len(text.strip()) < TEXT_THRESHOLD_CHARS:
+                image_page_nums.append(i)
+                pages.append((i, ""))  # placeholder — filled by OCR below
+            else:
+                pages.append((i, text))
+
+    if image_page_nums:
+        ocr_results = _ocr_pages(pdf_path, image_page_nums)
+        pages = [(pn, ocr_results[pn]) if pn in ocr_results else (pn, t)
+                 for pn, t in pages]
+
     return pages
 
 
 # ── Per-value extractors (stubs until each part lands) ──────────
 
-def extract_revenue(pages):              return None
+def extract_revenue(pages):
+    """Find revenue (or, for banks, total operating income).
+
+    Strategy:
+      1. Search inside the income statement (authoritative).
+      2. If nothing found there, fall back to scanning the whole document
+         (catches highlights/summary tables when income-statement parsing
+         fails — e.g. multi-line headers, RTL Arabic table quirks).
+    """
+    keywords = KEYWORDS["revenue"]
+    income_pages = _pages_matching_patterns(pages, INCOME_STATEMENT_PATTERNS)
+    return (_extract_in_pages(income_pages, keywords)
+            or _extract_in_pages(pages, keywords))
 def extract_net_income(pages):           return None
 def extract_eps(pages):                  return None
 def extract_total_assets(pages):         return None

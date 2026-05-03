@@ -8,3 +8,5 @@ gunicorn
 pytest
 yfinance
 pdfplumber
+pdf2image
+pytesseract
