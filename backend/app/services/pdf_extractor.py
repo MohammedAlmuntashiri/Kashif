@@ -123,7 +123,12 @@ KEYWORDS = {
         "إجمالي القروض", "مجموع القروض", "القروض",
     ],
     "cash_and_equivalents": [
+        # Standard single-line (non-bank issuers). Bank-specific keywords
+        # live in CASH_BANK_KEYWORDS / CASH_DUE_FROM_BANKS_KEYWORDS below
+        # because banks require component summation (two BS lines), not a
+        # single-value lookup.
         "Cash and cash equivalents", "Cash and equivalents",
+        # Arabic
         "النقد وما يماثله", "النقد ومعادلاته", "النقد ومايعادله",
     ],
     "free_cash_flow": [
@@ -435,6 +440,47 @@ BORROWINGS_DISQUALIFIERS = [
     re.compile(r"^lease\s+liabilities\s+continued", re.I),
     re.compile(r"interest\s+on\s+lease\s+liabilities", re.I),
 ]
+
+
+# ── Cash and equivalents: disqualifiers ─────────────────────────
+# "Cash and cash equivalents" appears in the cash-flow statement
+# (opening/closing balance lines), in footnote headers, and in
+# narrative text — none of which carry the BS asset-side value.
+# "Due to banks" is a liability (not an asset-side cash line).
+# "Restricted cash" is a separate BS line excluded from liquid cash.
+# "Cash dividend" / "cash flows" / "investments in cash" are
+# narrative / CF-statement mentions, not BS line items.
+CASH_DISQUALIFIERS = [
+    re.compile(r"restricted\s+cash", re.I),
+    re.compile(r"cash\s+flows?\b", re.I),
+    re.compile(r"cash\s+dividend", re.I),
+    re.compile(r"investments?\s+in\s+cash", re.I),
+    # CF statement opening/closing balance lines
+    re.compile(r"cash\s+and\s+cash\s+equivalents?\s+at\s+(?:beginning|end|start)", re.I),
+    re.compile(r"(?:beginning|end|start|opening|closing)\s+of\s+(?:the\s+)?(?:year|period)", re.I),
+    # Liability line (banks)
+    re.compile(r"due\s+to\s+banks?", re.I),
+]
+
+# Bank-specific cash component keywords. Banks (Al Rajhi, SNB) have no
+# "Cash and cash equivalents" line on their BS — instead they split liquid
+# assets across two lines that together form what yfinance / financial
+# providers call "Cash and Cash Equivalents":
+#   1. "Cash and balances with Central Banks"  (overnight + statutory reserves)
+#   2. "Due from banks and other financial institutions"  (interbank placements)
+# We sum both to match the conventional aggregation.
+CASH_BANK_KEYWORDS = _expand_arabic([
+    "Cash and balances with Central Banks",
+    "Cash and balances with central banks",
+    "النقد والأرصدة لدى البنك المركزي",
+    "النقد والأرصدة لدى البنوك المركزية",
+])
+CASH_DUE_FROM_BANKS_KEYWORDS = _expand_arabic([
+    "Due from banks and other financial institutions",
+    "Due from banks",
+    "أرصدة لدى البنوك",
+    "مستحق من البنوك",
+])
 
 
 # ── Unit detection ──────────────────────────────────────────────
@@ -1325,7 +1371,58 @@ def extract_total_borrowings(pages):
         exclude=BORROWINGS_DISQUALIFIERS,
         anchor_start=False,
     )
-def extract_cash_and_equivalents(pages): return None
+def extract_cash_and_equivalents(pages):
+    """Find cash and cash equivalents from the balance sheet asset side.
+
+    Restricts to the contiguous real-BS page block (BS header + "Total assets")
+    to avoid the cash-flow statement's opening/closing balance lines.
+
+    Two stages:
+
+    Stage 1 — single-value lookup for non-bank issuers. Matches "Cash and
+    cash equivalents" (or Arabic equivalent) near the top of the assets
+    section. Column-layout PDFs (Jarir, Habib) have the value on the next
+    line; next_line_fallback=True handles that. Almarai's kerning split
+    ("5 28,214" → 528,214) is resolved automatically by _first_plausible_number
+    mode B.
+
+    Stage 2 — component summation for banks (Al Rajhi, SNB). Banks have no
+    single "Cash and cash equivalents" line; instead they carry two separate
+    BS lines that together constitute liquid cash:
+      • "Cash and balances with Central Banks"  (incl. statutory reserves)
+      • "Due from banks and other financial institutions"  (interbank placements)
+    yfinance and financial data providers aggregate both into "Cash and Cash
+    Equivalents". Stage 2 sums them using _sum_components_in_pages with
+    CASH_DISQUALIFIERS to exclude the liability-side "Due to banks" line.
+    """
+    bs_pages = _pages_matching_patterns(pages, BALANCE_SHEET_PATTERNS)
+    real_bs = [(pn, t) for pn, t in bs_pages if TOTAL_ASSETS_RX.search(t)]
+    contiguous = []
+    prev_pn = None
+    for pn, t in real_bs:
+        if prev_pn is None or pn - prev_pn <= 2:
+            contiguous.append((pn, t))
+            prev_pn = pn
+        else:
+            break
+    subset = contiguous or bs_pages or pages
+
+    # Stage 1: non-bank single-value
+    n = _extract_in_pages(
+        subset,
+        KEYWORDS["cash_and_equivalents"],
+        exclude=CASH_DISQUALIFIERS,
+        next_line_fallback=True,
+    )
+    if n is not None:
+        return n
+
+    # Stage 2: bank component sum (Cash with CB + Due from banks)
+    return _sum_components_in_pages(
+        subset,
+        CASH_BANK_KEYWORDS + CASH_DUE_FROM_BANKS_KEYWORDS,
+        exclude=CASH_DISQUALIFIERS,
+    )
 def extract_free_cash_flow(pages):       return None
 def extract_shares_outstanding(pages):   return None
 def extract_dividends_per_share(pages):  return None
