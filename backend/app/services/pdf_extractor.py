@@ -300,10 +300,13 @@ EPS_DISQUALIFIERS = [
 # Each pattern requires a currency anchor (Saudi Riyals / SAR / SR /
 # الريالات / ريال) close to the unit word, except for the apostrophe form.
 UNIT_PATTERNS = [
-    # SAR'000  /  SR ' 000  (apostrophe = thousands, "Mn" = millions)
-    (re.compile(r"(?:SAR|SR)\s*['’‘′ʼ`]\s*000", re.I), 1_000),
-    (re.compile(r"(?:SAR|SR)\s*['’‘′ʼ`]\s*0{6}", re.I), 1_000_000),
-    (re.compile(r"(?:SAR|SR)\s*['’‘′ʼ`]\s*[Mm]n?\b", re.I), 1_000_000),
+    # SAR'000  /  SR ' 000  /  SAR‘'000 (OCR-garbled with double quotes)
+    # Allow whitespace + any combination of quote-like chars between the
+    # currency and the zero block; image-rendered statements (SNB) often
+    # come back with two stacked quotation marks.
+    (re.compile(r"(?:SAR|SR)[\s'’‘′ʼ`]*0{3}\b", re.I), 1_000),
+    (re.compile(r"(?:SAR|SR)[\s'’‘′ʼ`]*0{6}\b", re.I), 1_000_000),
+    (re.compile(r"(?:SAR|SR)[\s'’‘′ʼ`]*[Mm]n?\b", re.I), 1_000_000),
     # "in millions/thousands of Saudi Riyals|SAR|SR"
     (re.compile(r"\bin\s+millions?\s+of\s+(?:Saudi\s+Riyals?|SAR|SR)\b", re.I), 1_000_000),
     (re.compile(r"\bin\s+thousands?\s+of\s+(?:Saudi\s+Riyals?|SAR|SR)\b", re.I), 1_000),
@@ -374,6 +377,24 @@ _HEADER_PATTERN_STRINGS = _expand_arabic(_HEADER_PATTERN_STRINGS)
 INCOME_STATEMENT_PATTERNS = [re.compile(p, re.I) for p in _HEADER_PATTERN_STRINGS]
 
 
+# ── Balance-sheet detection ─────────────────────────────────────
+# Balance sheet (statement of financial position) is the authoritative
+# source for total_assets, shareholders_equity, total_borrowings, and
+# cash_and_equivalents. Most Saudi 2024 filings use IFRS terminology
+# ("Statement of Financial Position") rather than the older "Balance
+# Sheet" — both included for older filings.
+_BS_HEADER_PATTERN_STRINGS = [
+    r"statement\s+of\s+financial\s+position",
+    r"balance\s+sheet",
+    "قائمة المركز المالي",
+    "قائمة المركز المالي الموحدة",
+    "الميزانية العمومية",
+    "الميزانية",
+]
+_BS_HEADER_PATTERN_STRINGS = _expand_arabic(_BS_HEADER_PATTERN_STRINGS)
+BALANCE_SHEET_PATTERNS = [re.compile(p, re.I) for p in _BS_HEADER_PATTERN_STRINGS]
+
+
 def _pages_matching_patterns(pages, patterns):
     """Return the subset of pages whose text matches any of the given regexes."""
     matches = []
@@ -391,7 +412,8 @@ def _pages_matching_patterns(pages, patterns):
 def _value_near_keyword(text, keywords, *,
                         anchor_start=True, last=False, exclude=(),
                         min_abs=100, max_abs=float("inf"),
-                        require_decimal=False):
+                        require_decimal=False,
+                        next_line_fallback=False):
     """Find a plausible number on a line where the keyword appears.
 
     "Near the start" (anchor_start=True) = within the first 6 chars of the
@@ -422,13 +444,69 @@ def _value_near_keyword(text, keywords, *,
     labels in many Saudi annual reports (NUMBER_RE would otherwise
     capture "37)" as a plausible signed integer).
 
+    next_line_fallback=True: when the keyword line has no plausible number
+    on it, peek at the next non-empty line and use its first plausible
+    number. Required for column-layout balance sheets (Jarir, Habib) where
+    "Total assets" sits on a label-only line and the value lives below.
+
     Plausible number = not a year (2010-2099), within [min_abs, max_abs].
     Negatives "(1,234)" and "-1,234" are parsed as signed.
     """
+    def _first_plausible(s):
+        s = re.sub(r"(\d)\s+\.(\d)", r"\1.\2", s)
+        # Collect all parsed tokens first so the kerning heal below can
+        # cross-check against the YoY comparative column.
+        matches = []
+        for m in NUMBER_RE.finditer(s):
+            tok = m.group(0)
+            if require_decimal and "." not in tok:
+                continue
+            n = _parse_number(tok)
+            if n is None:
+                continue
+            if 2010 <= n <= 2099 and n == int(n):
+                continue
+            matches.append((tok, n))
+        if not matches:
+            return None
+        # Kerning-split heal: pdfplumber sometimes inserts a stray space
+        # between the leading digit and the rest of a comma-formatted number
+        # (Almarai 2024 BS: "TOTAL ASSETS 3 5,567,960 36,194,015" — the 3
+        # is the leading digit of 35,567,960, not a note ref). Distinguish
+        # from a real note number (Aramco "Revenue 3 1,801,674 1,604,220")
+        # by checking whether merging makes the YoY comparison plausible
+        # AND treating the digit as a note leaves it implausible. Skipped
+        # under require_decimal since per-share values don't follow this
+        # 3-column layout.
+        if len(matches) >= 3 and not require_decimal:
+            tok1, n1 = matches[0]
+            tok2, n2 = matches[1]
+            tok3, n3 = matches[2]
+            if (0 < n1 < 100 and "." not in tok1 and "." not in tok2
+                    and abs(n3) >= 1000):
+                digits1 = re.sub(r"\D", "", tok1)
+                digits2 = re.sub(r"\D", "", tok2)
+                if digits1 and digits2:
+                    try:
+                        merged = float(digits1 + digits2)
+                    except ValueError:
+                        merged = None
+                    if merged is not None:
+                        note_diff = abs(n2 - n3) / abs(n3)
+                        merge_diff = abs(merged - n3) / abs(n3)
+                        if merge_diff < 0.5 and note_diff > 0.5:
+                            if min_abs <= abs(merged) <= max_abs:
+                                return merged
+        for tok, n in matches:
+            if min_abs <= abs(n) <= max_abs:
+                return n
+        return None
+
     for kw in keywords:
         kw_lower = kw.lower()
         candidate = None
-        for line in text.splitlines():
+        lines = text.splitlines()
+        for i, line in enumerate(lines):
             stripped = line.strip()
             if exclude and any(p.search(stripped) for p in exclude):
                 continue
@@ -439,24 +517,26 @@ def _value_near_keyword(text, keywords, *,
             if anchor_start and pos > 6:
                 continue
             after = stripped[pos + len(kw):]
-            # Heal OCR-mangled decimals where a space was inserted between
-            # the integer and decimal parts ("2 .34" → "2.34"); seen on
-            # Almarai's EPS row.
-            after = re.sub(r"(\d)\s+\.(\d)", r"\1.\2", after)
-            for m in NUMBER_RE.finditer(after):
-                if require_decimal and "." not in m.group(0):
-                    continue  # skip integer captures like "37" from "(Note 37)"
-                n = _parse_number(m.group(0))
-                if n is None:
-                    continue
-                if 2010 <= n <= 2099 and n == int(n):
-                    continue  # year column header
-                if abs(n) < min_abs or abs(n) > max_abs:
-                    continue  # below/above the per-value plausible range
-                if not last:
-                    return n
-                candidate = n
-                break  # first plausible number on this line is the row's value
+            n = _first_plausible(after)
+            if n is None and next_line_fallback:
+                # Walk forward to the first non-empty, non-disqualified line
+                # and try its first plausible number. Caps at +3 lines so we
+                # don't stray into the next section.
+                for j in range(1, 4):
+                    if i + j >= len(lines):
+                        break
+                    nxt = lines[i + j].strip()
+                    if not nxt:
+                        continue
+                    if exclude and any(p.search(nxt) for p in exclude):
+                        break
+                    n = _first_plausible(nxt)
+                    break
+            if n is None:
+                continue
+            if not last:
+                return n
+            candidate = n
         if candidate is not None:
             return candidate
     return None
@@ -502,48 +582,140 @@ def _extract_in_pages(pages_subset, keywords, *,
     return None
 
 
-# ── Page extraction (text first, OCR fallback) ──────────────────
+# ── Page extraction (combined standard + rowwise pass) ──────────
 
-def _ocr_pages(pdf_path, page_numbers):
-    """OCR the specified 1-based page numbers, returns dict {page_num: text}.
+# Words within this many points of each other on the y-axis are treated as
+# being on the same visual row. Tuned for typical 11pt/12pt financial tables.
+ROWWISE_Y_TOLERANCE = 3
+# OCR's pixel scale at OCR_DPI=200 is ~3x pdfplumber's points; words on the
+# same baseline land within ~10px even for 12-point fonts.
+ROWWISE_Y_TOLERANCE_OCR = 10
 
-    pdf2image rasterizes each requested page individually (first_page/last_page)
-    so we don't pay the cost for pages that already had real text.
+
+def _cluster_rows(words, y_key, x_key, y_tol):
+    """Cluster word dicts into visual rows by y-coord, then order each row by x."""
+    if not words:
+        return []
+    words_sorted = sorted(words, key=lambda w: (w[y_key], w[x_key]))
+    rows = [[words_sorted[0]]]
+    for w in words_sorted[1:]:
+        if abs(w[y_key] - rows[-1][0][y_key]) <= y_tol:
+            rows[-1].append(w)
+        else:
+            rows.append([w])
+    return [sorted(row, key=lambda w: w[x_key]) for row in rows]
+
+
+def _ocr_pages_dual(pdf_path, page_numbers):
+    """OCR each page once and derive both standard and rowwise text.
+
+    pytesseract.image_to_data returns word-level data with bounding boxes
+    AND tesseract's own line grouping. From a single OCR call we build:
+      - standard text: words joined within tesseract's (block, par, line)
+        groups — equivalent to the prior image_to_string output
+      - rowwise text:  words clustered by 'top' y-coordinate (ignoring
+        tesseract's blocks) so column-layout statements (SNB IS, Jarir/
+        Habib BS) reconstruct visual rows with label and value adjacent
+
+    Calling image_to_data once instead of image_to_string + image_to_data
+    halves OCR time on image-heavy reports — the dominant cost in the
+    pipeline.
+
+    Returns {page_num: (standard_text, rowwise_text)}.
     """
     out = {}
     for pn in page_numbers:
-        images = convert_from_path(pdf_path, dpi=OCR_DPI, first_page=pn, last_page=pn)
+        images = convert_from_path(pdf_path, dpi=OCR_DPI,
+                                   first_page=pn, last_page=pn)
         if not images:
-            out[pn] = ""
+            out[pn] = ("", "")
             continue
-        out[pn] = pytesseract.image_to_string(images[0], lang=OCR_LANGS)
+        data = pytesseract.image_to_data(
+            images[0], lang=OCR_LANGS,
+            output_type=pytesseract.Output.DICT,
+        )
+        std_groups = {}
+        for i, txt in enumerate(data["text"]):
+            txt = txt.strip()
+            if not txt:
+                continue
+            key = (data["block_num"][i], data["par_num"][i], data["line_num"][i])
+            std_groups.setdefault(key, []).append((data["left"][i], txt))
+        std_lines = []
+        for key in sorted(std_groups):
+            words = sorted(std_groups[key])
+            std_lines.append(" ".join(w[1] for w in words))
+        std_text = "\n".join(std_lines)
+
+        row_words = []
+        for i, txt in enumerate(data["text"]):
+            txt = txt.strip()
+            if not txt:
+                continue
+            row_words.append({"text": txt,
+                              "top": data["top"][i],
+                              "left": data["left"][i]})
+        rows = _cluster_rows(row_words, y_key="top", x_key="left",
+                             y_tol=ROWWISE_Y_TOLERANCE_OCR)
+        rowwise_text = "\n".join(
+            " ".join(w["text"] for w in row) for row in rows
+        )
+        out[pn] = (std_text, rowwise_text)
     return out
 
 
-def _extract_text(pdf_path):
-    """Return [(page_num, text), ...] with 1-based page numbers.
+def _extract_text_dual(pdf_path):
+    """Extract both standard and rowwise page text in one combined pass.
 
-    Pages where pdfplumber finds < TEXT_THRESHOLD_CHARS are OCR'd, since
-    most "empty" pages in our test set are the image-rendered financial
-    statements (which is exactly what we need to read).
+    Single pdfplumber.open() per PDF (was 2), single OCR per image page
+    (was 2). For text pages, derives standard via extract_text() and
+    rowwise via extract_words() + y-clustering. For image pages (where
+    extract_words returns nothing AND extract_text returns less than
+    TEXT_THRESHOLD_CHARS), defers to _ocr_pages_dual which OCRs once
+    per page.
+
+    Standard text serves the keyword extractors that work on most PDFs.
+    Rowwise text serves the column-layout fix where pdfplumber's default
+    reading separates labels from values into different blocks (Jarir BS,
+    Habib BS, SNB IS).
+
+    Returns (standard_pages, rowwise_pages) — both [(page_num, text), ...]
+    with 1-based page numbers.
     """
-    pages = []
+    standard_pages = []
+    rowwise_pages = []
     image_page_nums = []
     with pdfplumber.open(pdf_path) as pdf:
         for i, page in enumerate(pdf.pages, start=1):
-            text = page.extract_text() or ""
-            if len(text.strip()) < TEXT_THRESHOLD_CHARS:
+            try:
+                words = page.extract_words(keep_blank_chars=False)
+            except Exception:
+                words = []
+            std_text = page.extract_text() or ""
+            if not words and len(std_text.strip()) < TEXT_THRESHOLD_CHARS:
                 image_page_nums.append(i)
-                pages.append((i, ""))  # placeholder — filled by OCR below
+                standard_pages.append((i, ""))
+                rowwise_pages.append((i, ""))
+                continue
+            standard_pages.append((i, std_text))
+            if words:
+                rows = _cluster_rows(words, y_key="top", x_key="x0",
+                                     y_tol=ROWWISE_Y_TOLERANCE)
+                rowwise_pages.append((i, "\n".join(
+                    " ".join(w["text"] for w in row) for row in rows
+                )))
             else:
-                pages.append((i, text))
+                # Text page with no extractable words (rare) — reuse standard.
+                rowwise_pages.append((i, std_text))
 
     if image_page_nums:
-        ocr_results = _ocr_pages(pdf_path, image_page_nums)
-        pages = [(pn, ocr_results[pn]) if pn in ocr_results else (pn, t)
-                 for pn, t in pages]
+        ocr_dual = _ocr_pages_dual(pdf_path, image_page_nums)
+        standard_pages = [(pn, ocr_dual[pn][0]) if pn in ocr_dual else (pn, t)
+                          for pn, t in standard_pages]
+        rowwise_pages = [(pn, ocr_dual[pn][1]) if pn in ocr_dual else (pn, t)
+                         for pn, t in rowwise_pages]
 
-    return pages
+    return standard_pages, rowwise_pages
 
 
 # ── Per-value extractors (stubs until each part lands) ──────────
@@ -632,7 +804,31 @@ def extract_eps(pages):
             if n is not None:
                 return n
     return None
-def extract_total_assets(pages):         return None
+def extract_total_assets(pages):
+    """Find total assets from the balance sheet bottom-line.
+
+    Strategy:
+      1. Search inside the balance sheet (authoritative).
+      2. Fall back to scanning the whole document.
+
+    Last-match semantics: "Total assets" appears multiple times in any
+    annual report — segment-level subtotals in the notes, comparative
+    columns, etc. The consolidated bottom-line on the balance sheet is
+    typically the LARGEST and the LAST occurrence within the BS page,
+    so last=True picks it over earlier sub-totals on the same page.
+    """
+    keywords = KEYWORDS["total_assets"]
+    bs_pages = _pages_matching_patterns(pages, BALANCE_SHEET_PATTERNS)
+    # Restrict to BS pages whenever they're detected — falling back to the
+    # whole document when BS pages exist but contain only label-column
+    # text (Jarir, Habib) was landing on segment-subtable rows from the
+    # notes section. Returning None here lets extract_all's rowwise
+    # fallback re-extract the BS page with word-coordinate row
+    # reconstruction. We only scan the whole doc when no BS-pattern page
+    # was detected at all (older or unusual filings).
+    if bs_pages:
+        return _extract_in_pages(bs_pages, keywords, last=True, next_line_fallback=True)
+    return _extract_in_pages(pages, keywords, last=True, next_line_fallback=True)
 def extract_shareholders_equity(pages):  return None
 def extract_total_borrowings(pages):     return None
 def extract_cash_and_equivalents(pages): return None
@@ -643,23 +839,66 @@ def extract_dividends_per_share(pages):  return None
 
 # ── Orchestrator ────────────────────────────────────────────────
 
+# Currency-like values where the rowwise re-extraction often surfaces a
+# materially larger consolidated figure than the standard pass — column-
+# layout PDFs make the standard pass land on a wrong-row fragment.
+# Per-share values (eps, dps) and counts (shares_outstanding) are excluded:
+# magnitude isn't a quality signal there.
+_PREFER_LARGER_FROM_ROWWISE = {
+    "revenue", "net_income", "total_assets", "shareholders_equity",
+    "total_borrowings", "cash_and_equivalents", "free_cash_flow",
+}
+
+
 def extract_all(pdf_path):
     """Extract all 10 financial values from one PDF.
 
+    Two-pass extraction:
+      1. Standard text — pdfplumber's default extract_text() with OCR
+         fallback for image-only pages.
+      2. Rowwise — words clustered by y-coordinate to reconstruct visual
+         rows. Fixes column-layout PDFs (Jarir, Habib BS, SNB IS) where
+         the default reading separates labels from values.
+
+    Per-value selection rule:
+      - If standard returned None, use rowwise (catches Jarir/Habib BS).
+      - If rowwise returned None, use standard.
+      - Otherwise, for currency-like values where rowwise > 2 × standard
+        and the rowwise result is at least 1M, use rowwise — the size
+        gap is a reliable signal that the standard pass landed on a
+        column-layout fragment (catches SNB revenue/net_income).
+      - In all other cases, prefer the standard pass.
+
     Returns dict with keys matching FinancialData column names. A value of
     None means extraction returned nothing — either the field is not
-    implemented yet, or the extractor couldn't find a match.
+    implemented yet, or both passes couldn't find a match.
     """
-    pages = _extract_text(pdf_path)
-    return {
-        "revenue":              extract_revenue(pages),
-        "net_income":           extract_net_income(pages),
-        "eps":                  extract_eps(pages),
-        "total_assets":         extract_total_assets(pages),
-        "shareholders_equity":  extract_shareholders_equity(pages),
-        "total_borrowings":     extract_total_borrowings(pages),
-        "cash_and_equivalents": extract_cash_and_equivalents(pages),
-        "free_cash_flow":       extract_free_cash_flow(pages),
-        "shares_outstanding":   extract_shares_outstanding(pages),
-        "dividends_per_share":  extract_dividends_per_share(pages),
+    extractors = {
+        "revenue":              extract_revenue,
+        "net_income":           extract_net_income,
+        "eps":                  extract_eps,
+        "total_assets":         extract_total_assets,
+        "shareholders_equity":  extract_shareholders_equity,
+        "total_borrowings":     extract_total_borrowings,
+        "cash_and_equivalents": extract_cash_and_equivalents,
+        "free_cash_flow":       extract_free_cash_flow,
+        "shares_outstanding":   extract_shares_outstanding,
+        "dividends_per_share":  extract_dividends_per_share,
     }
+    standard_pages, rowwise_pages = _extract_text_dual(pdf_path)
+    standard = {name: fn(standard_pages) for name, fn in extractors.items()}
+    rowwise = {name: fn(rowwise_pages) for name, fn in extractors.items()}
+
+    result = {}
+    for name in extractors:
+        s, r = standard[name], rowwise[name]
+        if s is None:
+            result[name] = r
+        elif r is None:
+            result[name] = s
+        elif (name in _PREFER_LARGER_FROM_ROWWISE
+              and abs(r) > 2 * abs(s) and abs(r) >= 1_000_000):
+            result[name] = r
+        else:
+            result[name] = s
+    return result
