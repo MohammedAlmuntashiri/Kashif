@@ -37,3 +37,6 @@ pgdata/
 
 # PDF test fixtures — download separately, see backend/test_pdfs/SOURCES.md
 backend/test_pdfs/*.pdf
+
+#Reminder
+next_session_brief.txt

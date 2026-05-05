@@ -77,26 +77,39 @@ def _expand_arabic(keywords):
 
 KEYWORDS = {
     "revenue": [
-        # Aramco-style: matches the broader yfinance "Total Revenue" definition
-        # (must come BEFORE "Revenue" since both lines appear and substring matches "Revenue").
+        # Specific phrases come first — generic "Revenue" / "Revenues" below
+        # would otherwise match unrelated lines like "Other revenue" (Bupa)
+        # or "Revenue from contracts" via substring search.
+        #
+        # Aramco-style: matches the broader yfinance "Total Revenue" definition.
         "Revenue and other income related to sales",
-        # Industrial / consumer / telecom / energy
+        # Insurance (IFRS 17): "Insurance revenue" is the standard line item
+        # on the income statement (Bupa 2024 uses this exact phrase). Net
+        # earned premiums / gross written premiums are pre-IFRS-17 fallbacks
+        # for older filings. MUST come before generic "Revenue" — otherwise
+        # "Revenue" matches "Other revenue 90,386" (pos=6, anchor-allowed)
+        # and never reaches the real insurance line.
+        "Insurance revenue", "Net earned premiums", "Gross written premiums",
+        "إيرادات التأمين", "صافي الأقساط المكتسبة", "إجمالي الأقساط المكتتبة",
+        # Banks (no "revenue" line — total operating income is the analog).
+        # Net operating income is the after-impairment variant some banks use.
+        "Total operating income", "Net operating income", "Net financing income",
+        "إجمالي الدخل التشغيلي", "صافي الدخل التشغيلي", "صافي دخل العمليات",
+        "صافي دخل التمويل", "الدخل التشغيلي",
+        # Industrial / consumer / telecom / energy (generic — match last).
         "Total revenue", "Revenue", "Revenues", "Net sales", "Total sales",
         "إجمالي الإيرادات", "الإيرادات", "إيرادات", "الايرادات", "ايرادات",
         "صافي المبيعات", "المبيعات",
-        # Banks (no "revenue" line — total operating income is the analog)
-        "Total operating income", "Net financing income",
-        "إجمالي الدخل التشغيلي", "صافي دخل التمويل", "الدخل التشغيلي",
     ],
     # net_income is split into attribution + total constants below the
     # KEYWORDS dict (extract_net_income runs them in stages). Leaving an
     # empty placeholder here so the dict still has the key for callers
     # that introspect KEYWORDS.
     "net_income": [],
-    "eps": [
-        "Basic earnings per share", "Earnings per share", "EPS", "Basic EPS",
-        "ربحية السهم الأساسية", "ربحية السهم", "العائد على السهم",
-    ],
+    # eps uses the EPS_KEYWORDS / EPS_DISQUALIFIERS module-level
+    # constants below the KEYWORDS dict — extract_eps applies a different
+    # numeric range and skips unit detection.
+    "eps": [],
     "total_assets": [
         "Total assets", "إجمالي الأصول", "إجمالي الموجودات", "مجموع الموجودات",
     ],
@@ -154,6 +167,13 @@ NET_INCOME_ATTRIBUTION_KEYWORDS = _expand_arabic([
     "Net profit attributable to shareholders of the parent",
     "Profit attributable to equity holders of the parent",
     "Profit attributable to shareholders of the parent",
+    # Insurance variants use passive verb "attributed" instead of the
+    # adjective "attributable" — Bupa 2024 prints "Net income attributed
+    # to the shareholders". The label/value are split across two lines, so
+    # this won't capture the value directly; the canonical post-zakat row
+    # is caught by the "After zakat and income tax" total-keyword above.
+    "Net income attributed to the shareholders",
+    "Income attributed to the shareholders",
     "Equity holders of the Parent Company",
     "Equity holders of the parent",
     "Equity holders of the Bank",
@@ -173,6 +193,16 @@ NET_INCOME_ATTRIBUTION_KEYWORDS = _expand_arabic([
     "مساهمي الشركة الأم",
 ])
 NET_INCOME_TOTAL_KEYWORDS = _expand_arabic([
+    # Insurance bottom line — Bupa 2024 splits the label across two lines:
+    #   "NET INCOME ATTRIBUTED TO THE SHAREHOLDERS"
+    #   "AFTER ZAKAT AND INCOME TAX 1,166,002 940,163"
+    # The second line carries the value, so we anchor on its leading phrase.
+    # Safe vs the "before zakat" pseudo-total — that's filtered by
+    # NET_INCOME_TOTAL_DISQUALIFIERS before we even see the line. MUST come
+    # before generic "Net income" — that keyword would otherwise match a
+    # random in-document mention with a small unrelated number on the same line.
+    "After zakat and income tax",
+    "بعد الزكاة وضريبة الدخل",
     "Profit for the year", "Net profit", "Net income", "Net earnings",
     "صافي الدخل", "صافي الربح", "ربح السنة", "ربح العام",
 ])
@@ -180,8 +210,77 @@ NET_INCOME_TOTAL_KEYWORDS = _expand_arabic([
 # Al Rajhi's "Net income for the year before Zakat" is 21.97B vs the
 # real 19.73B post-zakat figure on the next line.
 NET_INCOME_TOTAL_DISQUALIFIERS = [
+    # Allow punctuation between "before" and "zakat/tax" — Bupa's page 69
+    # supplementary table flattens to "...before, zakat and income tax..."
+    # which strict \s+ would miss.
+    re.compile(r"before[\W_]*zakat", re.I),
+    re.compile(r"before[\W_]*(?:income[\W_]*)?tax", re.I),
+    re.compile(r"قبل\s+الزكاة"),
+    re.compile(r"قبل\s+الضريبة"),
+]
+
+
+# ── EPS: total (basic) earnings per share ───────────────────────
+# yfinance reports basic EPS attributable to ordinary equity holders.
+# Two complications shape the keyword + filter set:
+#
+#   1. Continuing-vs-total split (STC, SABIC) — same as net_income, the
+#      total EPS sub-line comes AFTER the continuing-ops one. Last-match
+#      semantics + a "continuing operations" disqualifier give us the
+#      total figure.
+#
+#   2. Bullet-list sub-lines under an EPS-section header (SABIC) — labels
+#      look like "• Net income (loss) 0.51 (0.92)", i.e. the same words
+#      that appear on the actual income-statement totals (3.7M / -384K).
+#      Adding "Net income" to EPS_KEYWORDS would normally collide with
+#      the income line; max_abs=10_000 filters out the multi-million
+#      currency value while leaving the genuine 0.51 EPS in scope.
+EPS_KEYWORDS = _expand_arabic([
+    # Singular "earning" first — Al Rajhi's notes section uses singular
+    # ("Basic and diluted earning per share (in SAR) 4.67 3.95"), while
+    # page 10's income statement says plural ("...earnings per share...
+    # 4.81") which is the pre-Sukuk-adjustment figure. Tadawul/yfinance
+    # report the post-adjustment 4.67, so the singular variant must win.
+    "Basic and diluted earning per share",
+    "Basic and diluted earnings per share",
+    "Basic earning per share",
+    "Basic earnings per share",
+    "Diluted earnings per share",
+    "Diluted earning per share",
+    "Earnings per share",
+    "Earning per share",
+    # SABIC's bullet-list sub-lines under the EPS header reuse income
+    # labels — these match alongside the EPS-specific phrases above.
+    "Net income (loss)",
+    "Net income",
+    "Net profit",
+    # STC + Almarai print the EPS values on rows whose ONLY label is
+    # "Basic" / "Diluted" (the "Earnings per share" is a separate header
+    # line above). Kept low-priority so the more-specific phrases above
+    # win when present.
+    "Basic",
+    "Diluted",
+    # Habib's EPS row spans two lines; the value-bearing second line is:
+    #   "attributable to equity holders of the parent 26 6.62 5.85"
+    # max_abs=10_000 + require_decimal=True keep this safe — the same phrase
+    # in net-income context (Aramco/SABIC/etc.) carries large integer values
+    # that get filtered out before this keyword has a chance to claim them.
+    "attributable to equity holders of the parent",
+    # Arabic
+    "ربحية السهم الأساسية",
+    "ربحية السهم المخففة",
+    "ربحية السهم",
+    "العائد على السهم",
+    "أساسي",
+    "مخفف",
+])
+EPS_DISQUALIFIERS = [
+    re.compile(r"continuing\s+operations", re.I),
+    re.compile(r"discontinued\s+operations", re.I),
     re.compile(r"before\s+zakat", re.I),
     re.compile(r"before\s+(?:income\s+)?tax", re.I),
+    re.compile(r"العمليات\s+المستمرة"),
+    re.compile(r"العمليات\s+المتوقفة"),
     re.compile(r"قبل\s+الزكاة"),
     re.compile(r"قبل\s+الضريبة"),
 ]
@@ -289,7 +388,10 @@ def _pages_matching_patterns(pages, patterns):
 
 # ── Keyword-based value lookup ──────────────────────────────────
 
-def _value_near_keyword(text, keywords, *, anchor_start=True, last=False, exclude=()):
+def _value_near_keyword(text, keywords, *,
+                        anchor_start=True, last=False, exclude=(),
+                        min_abs=100, max_abs=float("inf"),
+                        require_decimal=False):
     """Find a plausible number on a line where the keyword appears.
 
     "Near the start" (anchor_start=True) = within the first 6 chars of the
@@ -308,9 +410,20 @@ def _value_near_keyword(text, keywords, *, anchor_start=True, last=False, exclud
 
     exclude is a list of compiled regexes; matching lines are skipped.
 
-    Plausible number = not a year (2010-2099), not tiny (|n| < 100, which
-    rules out page references and footnote markers). Negatives "(1,234)"
-    and "-1,234" are parsed as signed by NUMBER_RE + _parse_number.
+    min_abs / max_abs bound the plausible-value range. Defaults (100, inf)
+    suit currency rows. EPS / DPS need min_abs ≈ 0.01, max_abs ≈ 10_000:
+    EPS is typically 0.10–20 SAR/share, and the upper bound filters out
+    income totals when an EPS keyword (e.g. SABIC's "• Net income (loss)"
+    bullet) also matches the corresponding income-statement total line.
+
+    require_decimal=True rejects integer matches — used for per-share
+    values, which are always printed with at least one decimal place.
+    This filters out the "Note 37" reference column that follows EPS row
+    labels in many Saudi annual reports (NUMBER_RE would otherwise
+    capture "37)" as a plausible signed integer).
+
+    Plausible number = not a year (2010-2099), within [min_abs, max_abs].
+    Negatives "(1,234)" and "-1,234" are parsed as signed.
     """
     for kw in keywords:
         kw_lower = kw.lower()
@@ -326,14 +439,20 @@ def _value_near_keyword(text, keywords, *, anchor_start=True, last=False, exclud
             if anchor_start and pos > 6:
                 continue
             after = stripped[pos + len(kw):]
+            # Heal OCR-mangled decimals where a space was inserted between
+            # the integer and decimal parts ("2 .34" → "2.34"); seen on
+            # Almarai's EPS row.
+            after = re.sub(r"(\d)\s+\.(\d)", r"\1.\2", after)
             for m in NUMBER_RE.finditer(after):
+                if require_decimal and "." not in m.group(0):
+                    continue  # skip integer captures like "37" from "(Note 37)"
                 n = _parse_number(m.group(0))
                 if n is None:
                     continue
                 if 2010 <= n <= 2099 and n == int(n):
                     continue  # year column header
-                if abs(n) < 100:
-                    continue  # page ref / footnote
+                if abs(n) < min_abs or abs(n) > max_abs:
+                    continue  # below/above the per-value plausible range
                 if not last:
                     return n
                 candidate = n
@@ -343,14 +462,43 @@ def _value_near_keyword(text, keywords, *, anchor_start=True, last=False, exclud
     return None
 
 
-def _extract_in_pages(pages_subset, keywords, **kwargs):
+def _extract_in_pages(pages_subset, keywords, *,
+                      skip_unit=False, keyword_priority_over_page=False,
+                      **kwargs):
     """Run _value_near_keyword across a list of pages; first hit wins.
-    Applies unit detection on the page where the match was found.
-    kwargs (anchor_start, last, exclude) are forwarded to _value_near_keyword."""
+
+    Applies unit detection on the page where the match was found, unless
+    skip_unit=True (for per-share values like EPS / DPS, which are already
+    in SAR-per-share and must not be multiplied by the page's currency
+    unit hint).
+
+    keyword_priority_over_page=False (default): page-major iteration —
+    each page tries every keyword in order. The first page with any
+    keyword hit returns that page's match.
+
+    keyword_priority_over_page=True: keyword-major iteration — each
+    keyword tries every page in order. A more-specific keyword on a
+    later page wins over a less-specific keyword on an earlier page.
+    Required for EPS, where Al Rajhi shows two values: a pre-Sukuk
+    figure on the income-statement page (matched by the plural
+    "earnings" keyword) and the canonical post-Sukuk figure deeper
+    in the notes (matched by the singular "earning" keyword); the
+    notes value is the one yfinance/Tadawul report.
+
+    kwargs (anchor_start, last, exclude, min_abs, max_abs,
+    require_decimal) are forwarded to _value_near_keyword.
+    """
+    if keyword_priority_over_page:
+        for kw in keywords:
+            for _, text in pages_subset:
+                n = _value_near_keyword(text, [kw], **kwargs)
+                if n is not None:
+                    return n if skip_unit else n * _detect_unit(text)
+        return None
     for _, text in pages_subset:
         n = _value_near_keyword(text, keywords, **kwargs)
         if n is not None:
-            return n * _detect_unit(text)
+            return n if skip_unit else n * _detect_unit(text)
     return None
 
 
@@ -433,9 +581,16 @@ def extract_net_income(pages):
     full-year loss in "(1,234)" parens is returned as -1,234.
     """
     income_pages = _pages_matching_patterns(pages, INCOME_STATEMENT_PATTERNS)
+    # DISQUALIFIERS apply to all stages: a "before zakat" / "before tax"
+    # row is never the canonical net-income figure, regardless of which
+    # keyword family matched it. Without this, the permissive Bupa
+    # attribution keyword ("Income attributed to the shareholders") was
+    # catching pre-zakat rows in supplementary tables.
     stages = [
-        (NET_INCOME_ATTRIBUTION_KEYWORDS, dict(last=True, anchor_start=True)),
-        (NET_INCOME_ATTRIBUTION_KEYWORDS, dict(last=True, anchor_start=False)),
+        (NET_INCOME_ATTRIBUTION_KEYWORDS,
+         dict(last=True, anchor_start=True, exclude=NET_INCOME_TOTAL_DISQUALIFIERS)),
+        (NET_INCOME_ATTRIBUTION_KEYWORDS,
+         dict(last=True, anchor_start=False, exclude=NET_INCOME_TOTAL_DISQUALIFIERS)),
         (NET_INCOME_TOTAL_KEYWORDS,
          dict(last=False, anchor_start=True, exclude=NET_INCOME_TOTAL_DISQUALIFIERS)),
     ]
@@ -445,7 +600,38 @@ def extract_net_income(pages):
             if n is not None:
                 return n
     return None
-def extract_eps(pages):                  return None
+def extract_eps(pages):
+    """Find basic earnings per share (parent-attributable, total).
+
+    Per subset (income-statement pages first, then whole doc), run two
+    stages and return the first hit:
+      1. EPS keywords with start-of-line anchor + LAST match. Last-match
+         picks the total-EPS row over the continuing-ops one (STC, SABIC).
+      2. Same keywords without the anchor, for pdfplumber-flattened
+         multi-column layouts.
+
+    Per-share tweaks:
+      - skip_unit=True — EPS is already in SAR per share; the page's
+        "in millions of SR" hint must NOT scale it.
+      - min_abs=0.01 — EPS values are typically 0.10–20 SAR/share, well
+        below the default currency threshold.
+      - max_abs=10_000 — filters multi-million income totals when an EPS
+        keyword (e.g. SABIC's "• Net income (loss)") also matches the
+        consolidated income line.
+      - EPS_DISQUALIFIERS skips "continuing operations" / "before zakat"
+        rows so total-EPS wins over continuing-ops EPS.
+    """
+    income_pages = _pages_matching_patterns(pages, INCOME_STATEMENT_PATTERNS)
+    eps_kwargs = dict(skip_unit=True, last=True, exclude=EPS_DISQUALIFIERS,
+                      min_abs=0.01, max_abs=10_000, require_decimal=True,
+                      keyword_priority_over_page=True)
+    for subset in (income_pages, pages):
+        for anchor_start in (True, False):
+            n = _extract_in_pages(subset, EPS_KEYWORDS,
+                                  anchor_start=anchor_start, **eps_kwargs)
+            if n is not None:
+                return n
+    return None
 def extract_total_assets(pages):         return None
 def extract_shareholders_equity(pages):  return None
 def extract_total_borrowings(pages):     return None

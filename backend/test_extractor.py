@@ -50,6 +50,9 @@ TEST_FILES = {
     "7010": ("7010_stc_2024_annual_en.pdf",      "7010_stc_2024_annual_ar.pdf"),
     "2280": ("2280_almarai_2024_annual_en.pdf",  "2280_almarai_2024_annual_ar.pdf"),
     "7030": ("7030_zain_2024_annual_en.pdf",     "7030_zain_2024_annual_ar.pdf"),
+    "1180": ("1180_snb_2024_annual_en.pdf",      "1180_snb_2024_annual_ar.pdf"),
+    "4013": ("4013_habib_2024_annual_en.pdf",    "4013_habib_2024_annual_ar.pdf"),
+    "8210": ("8210_bupa_2024_annual_en.pdf",     "8210_bupa_2024_annual_ar.pdf"),
 }
 
 # Per-value tolerance as a relative fraction (0.05 = 5%).
