@@ -343,6 +343,100 @@ EPS_DISQUALIFIERS = [
 ]
 
 
+# ── Total borrowings: sum of debt + IFRS-16 lease liabilities ───
+# yfinance / Tadawul define total_borrowings as interest-bearing debt
+# plus IFRS-16 lease liabilities (current and non-current). The
+# extraction sums one value per matching BS line — most issuers split
+# borrowings into long-term + current portion, and lease liabilities
+# the same way, so a typical row contributes 4 lines to the total.
+#
+# Bank/insurance variation is the main complication:
+#   Banks (Al Rajhi, SNB) — no "borrowings" line. Matches use bank-
+#     specific instrument names (Sukuk Issued, Debt securities issued
+#     and term loans) and explicitly exclude customer deposits, due
+#     to banks, and AT1 hybrid capital (Equity Sukuk, Tier 1 Sukuk).
+#   Insurance (Bupa) — typically only a lease liability; the lease
+#     keywords cover this without anything else needed.
+BORROWINGS_TOTAL_KEYWORDS = _expand_arabic([
+    # Aramco prints this on a capital-structure / gearing notes page,
+    # giving us a single-line total. Stage 1 prefers it over summation.
+    "Total borrowings (current and non-current)",
+    "Total borrowings",
+    "Total debt",
+    "Total loans and borrowings",
+    "إجمالي القروض",
+    "إجمالي الديون",
+])
+# Component keywords identify a BS row as part of total_borrowings.
+# More-specific phrases (e.g. "Long-term borrowings") come first so
+# substring matching anchors there before the generic "Borrowings"
+# fallback at the bottom; the line-deduplication in
+# _sum_components_in_pages prevents the same row from being counted
+# twice when multiple keywords would match it.
+BORROWINGS_COMPONENT_KEYWORDS = _expand_arabic([
+    # Bank-specific instruments (Al Rajhi, SNB)
+    "Debt securities issued and term loans",
+    "Sukuk Issued",
+    # Long-term / non-current variants
+    "Long-term borrowings", "Long term borrowings",
+    "Long-term loans", "Long term loans",
+    "Long-term debt", "Long term debt",
+    # Short-term / current variants
+    "Short-term borrowings", "Short term borrowings",
+    "Short-term loans", "Short term loans",
+    "Short-term debt", "Short term debt",
+    "Current portion of borrowings",
+    "Current portion of debt",
+    "Current portion of long-term loans",
+    "Current portion of long-term debt",
+    # Combined / generic — Aramco prints just "Borrowings" twice (NC
+    # then C, distinguished by section, not label); Almarai uses
+    # "Loans and Borrowings"; Jarir uses "Bank borrowings".
+    "Loans and Borrowings",
+    "Bank borrowings",
+    "Borrowings",
+    "Debt",
+    # Arabic
+    "القروض", "الديون",
+])
+LEASE_COMPONENT_KEYWORDS = _expand_arabic([
+    "Current portion of lease liabilities",
+    "Current lease liabilities",
+    "Long-term lease liabilities", "Long term lease liabilities",
+    # Bupa singular ("Lease liability") and plural form used by
+    # everyone else — both covered.
+    "Lease liabilities",
+    "Lease liability",
+    # Arabic
+    "التزامات عقود الإيجار",
+    "التزامات الإيجار",
+])
+# Lines mentioning these are NOT borrowings even when they look like it.
+# Customer deposits and "Due to banks" are core bank funding sources
+# (yfinance treats neither as debt). Equity Sukuk / Tier 1 Sukuk are
+# AT1 hybrid capital, classified as equity. The borrowing-cost /
+# borrowing-rate / "investments in debt" patterns filter narrative
+# mentions and asset-side debt instruments.
+BORROWINGS_DISQUALIFIERS = [
+    re.compile(r"customers?'?\s*deposits", re.I),
+    re.compile(r"due\s+to\s+banks?", re.I),
+    re.compile(r"equity\s+sukuk", re.I),
+    re.compile(r"tier\s*[12]\s*sukuk", re.I),
+    re.compile(r"perpetual\s+sukuk", re.I),
+    re.compile(r"borrowing\s+costs?", re.I),
+    re.compile(r"borrowing\s+rate", re.I),
+    re.compile(r"borrowing\s+of\s+funds", re.I),
+    re.compile(r"movement\s+of\s+borrowings", re.I),
+    re.compile(r"investments?\s+in\s+debt", re.I),
+    re.compile(r"debt\s+instruments?\b", re.I),
+    re.compile(r"debt\s+investment", re.I),
+    re.compile(r"debt\s+securities?\s+at\s+(?:FVOCI|FVPL)", re.I),
+    re.compile(r"net\s+debt", re.I),
+    re.compile(r"^lease\s+liabilities\s+continued", re.I),
+    re.compile(r"interest\s+on\s+lease\s+liabilities", re.I),
+]
+
+
 # ── Unit detection ──────────────────────────────────────────────
 # Match a unit hint only when it appears in a recognisable declaration
 # context, not in narrative prose ("impairment of SR 1,387 million" should
@@ -409,6 +503,98 @@ def _parse_number(s):
         return None
 
 
+def _first_plausible_number(s, *, min_abs=100, max_abs=float("inf"),
+                            require_decimal=False):
+    """Return the first plausible number in a string, with kerning heal.
+
+    "Plausible" = within [min_abs, max_abs], not a year (2010-2099).
+    require_decimal=True rejects integer matches (used for per-share values).
+
+    Kerning heal: pdfplumber sometimes splits a leading digit from the rest
+    of a comma-formatted number (Almarai's "TOTAL ASSETS 3 5,567,960
+    36,194,015" — the 3 is the leading digit of 35,567,960, not a note ref).
+    When 3+ numbers are present and the first is a small integer, we test
+    whether merging it with the second produces a number close to the YoY
+    comparative (the third); if so, the merge wins. Skipped under
+    require_decimal because per-share values don't follow this 3-column
+    layout.
+    """
+    s = re.sub(r"(\d)\s+\.(\d)", r"\1.\2", s)
+    matches = []
+    for m in NUMBER_RE.finditer(s):
+        tok = m.group(0)
+        if require_decimal and "." not in tok:
+            continue
+        n = _parse_number(tok)
+        if n is None:
+            continue
+        if 2010 <= n <= 2099 and n == int(n):
+            continue
+        matches.append((tok, n))
+    if not matches:
+        return None
+    if len(matches) >= 3 and not require_decimal:
+        tok1, n1 = matches[0]
+        tok2, n2 = matches[1]
+        tok3, n3 = matches[2]
+        if (0 < n1 < 100 and "." not in tok1 and "." not in tok2
+                and abs(n3) >= 1000):
+            digits1 = re.sub(r"\D", "", tok1)
+            digits2 = re.sub(r"\D", "", tok2)
+            if digits1 and digits2:
+                try:
+                    merged = float(digits1 + digits2)
+                except ValueError:
+                    merged = None
+                if merged is not None:
+                    note_diff = abs(n2 - n3) / abs(n3)
+                    merge_diff = abs(merged - n3) / abs(n3)
+                    if merge_diff < 0.5 and note_diff > 0.5:
+                        if min_abs <= abs(merged) <= max_abs:
+                            return merged
+    # Second kerning mode: "note tagalong main_value tagalong prior_value"
+    # — Almarai 2024 BS prints "Lease Liabilities 9 3 97,701 3 69,113" where
+    # 9 is the note number, 3 is the leading digit of 397,701 split from
+    # the rest by space, 97,701 is the tail. Same applies to the prior-year
+    # column. Detected by: tok1 is a small note-like integer, tok2 and
+    # tok4 are tagalong digits, tok3 and tok5 are the comma-formatted
+    # tails. We accept the merge when YoY consistency holds.
+    if len(matches) >= 5 and not require_decimal:
+        tok2, n2 = matches[1]
+        tok3, n3 = matches[2]
+        tok4, n4 = matches[3]
+        tok5, n5 = matches[4]
+        if (0 < n2 < 100 and 0 < n4 < 100
+                and "." not in tok2 and "." not in tok3
+                and "." not in tok4 and "." not in tok5
+                and abs(n3) >= 1000 and abs(n5) >= 1000):
+            d2 = re.sub(r"\D", "", tok2)
+            d3 = re.sub(r"\D", "", tok3)
+            d4 = re.sub(r"\D", "", tok4)
+            d5 = re.sub(r"\D", "", tok5)
+            if d2 and d3 and d4 and d5:
+                try:
+                    merged_cur = float(d2 + d3)
+                    merged_prior = float(d4 + d5)
+                except ValueError:
+                    merged_cur = merged_prior = None
+                if merged_cur and merged_prior:
+                    merge_diff = abs(merged_cur - merged_prior) / abs(merged_prior)
+                    # Threshold 0.8 (loose) — Almarai 2024's current loans
+                    # & borrowings dropped 65% YoY (1,229,996 vs 3,528,828),
+                    # a real change. The pattern signal (small / large /
+                    # small / large with consistent magnitudes) is strong
+                    # enough that we can tolerate large YoY swings; the
+                    # check still catches absurd merges (>= 80% diff
+                    # implies the tokens probably aren't related at all).
+                    if merge_diff < 0.8 and min_abs <= abs(merged_cur) <= max_abs:
+                        return merged_cur
+    for tok, n in matches:
+        if min_abs <= abs(n) <= max_abs:
+            return n
+    return None
+
+
 # ── Income statement detection ──────────────────────────────────
 # The income statement (a.k.a. statement of profit or loss) is the
 # authoritative place for revenue and net income. Searching here first
@@ -450,6 +636,14 @@ _BS_HEADER_PATTERN_STRINGS = [
 ]
 _BS_HEADER_PATTERN_STRINGS = _expand_arabic(_BS_HEADER_PATTERN_STRINGS)
 BALANCE_SHEET_PATTERNS = [re.compile(p, re.I) for p in _BS_HEADER_PATTERN_STRINGS]
+
+# Used by extract_total_borrowings to identify the *actual* BS page
+# (which carries "Total assets") versus notes-section pages that match
+# BS_HEADER but are really maturity / liquidity-risk tables (STC's
+# note 27, SNB's note 26). Without this filter, those notes pages
+# add 4-8 extra rows of borrowings and inflate the total ~3x.
+TOTAL_ASSETS_RX = re.compile(r"total\s+assets|إجمالي\s+الأصول|إجمالي\s+الموجودات",
+                             re.I)
 
 
 def _pages_matching_patterns(pages, patterns):
@@ -521,54 +715,8 @@ def _value_near_keyword(text, keywords, *,
     Negatives "(1,234)" and "-1,234" are parsed as signed.
     """
     def _first_plausible(s):
-        s = re.sub(r"(\d)\s+\.(\d)", r"\1.\2", s)
-        # Collect all parsed tokens first so the kerning heal below can
-        # cross-check against the YoY comparative column.
-        matches = []
-        for m in NUMBER_RE.finditer(s):
-            tok = m.group(0)
-            if require_decimal and "." not in tok:
-                continue
-            n = _parse_number(tok)
-            if n is None:
-                continue
-            if 2010 <= n <= 2099 and n == int(n):
-                continue
-            matches.append((tok, n))
-        if not matches:
-            return None
-        # Kerning-split heal: pdfplumber sometimes inserts a stray space
-        # between the leading digit and the rest of a comma-formatted number
-        # (Almarai 2024 BS: "TOTAL ASSETS 3 5,567,960 36,194,015" — the 3
-        # is the leading digit of 35,567,960, not a note ref). Distinguish
-        # from a real note number (Aramco "Revenue 3 1,801,674 1,604,220")
-        # by checking whether merging makes the YoY comparison plausible
-        # AND treating the digit as a note leaves it implausible. Skipped
-        # under require_decimal since per-share values don't follow this
-        # 3-column layout.
-        if len(matches) >= 3 and not require_decimal:
-            tok1, n1 = matches[0]
-            tok2, n2 = matches[1]
-            tok3, n3 = matches[2]
-            if (0 < n1 < 100 and "." not in tok1 and "." not in tok2
-                    and abs(n3) >= 1000):
-                digits1 = re.sub(r"\D", "", tok1)
-                digits2 = re.sub(r"\D", "", tok2)
-                if digits1 and digits2:
-                    try:
-                        merged = float(digits1 + digits2)
-                    except ValueError:
-                        merged = None
-                    if merged is not None:
-                        note_diff = abs(n2 - n3) / abs(n3)
-                        merge_diff = abs(merged - n3) / abs(n3)
-                        if merge_diff < 0.5 and note_diff > 0.5:
-                            if min_abs <= abs(merged) <= max_abs:
-                                return merged
-        for tok, n in matches:
-            if min_abs <= abs(n) <= max_abs:
-                return n
-        return None
+        return _first_plausible_number(s, min_abs=min_abs, max_abs=max_abs,
+                                       require_decimal=require_decimal)
 
     # Normalize apostrophe variants on the entire text once. The kw_lower
     # below also gets normalized so curly/straight-apostrophe mismatches
@@ -714,6 +862,58 @@ def _extract_unlabeled_subtotal(pages_subset, header_rx, *,
     return None
 
 
+def _sum_components_in_pages(pages_subset, keywords, *, exclude=(),
+                             min_abs=100, anchor_start=True):
+    """Sum the first plausible numeric value on every line that matches any
+    of the given keywords (and isn't disqualified) across pages_subset.
+    Per-page unit scaling is applied. Returns the sum or None when nothing
+    matched.
+
+    Used by extract_total_borrowings: most BS layouts split borrowings into
+    a long-term row and a current-portion row, plus the same split for
+    lease liabilities — so a typical filing contributes 4 lines summed
+    together. (Page, line) is counted at most once even when several
+    keywords would match the same row, so the broad "Borrowings" fallback
+    doesn't double-count rows already matched by "Long-term borrowings".
+
+    Uses _first_plausible_number for value extraction so kerning-split
+    heal (Almarai's "8 ,900,245") works the same as for single-value
+    keyword search.
+    """
+    norm_kws = [_normalize_apostrophes(kw).lower() for kw in keywords]
+    total = 0.0
+    matched = 0
+    for _, text in pages_subset:
+        text_norm = _normalize_apostrophes(text)
+        unit = _detect_unit(text_norm)
+        seen_lines = set()
+        for line_idx, line in enumerate(text_norm.splitlines()):
+            stripped = line.strip()
+            if not stripped or line_idx in seen_lines:
+                continue
+            if exclude and any(p.search(stripped) for p in exclude):
+                continue
+            stripped_lower = stripped.lower()
+            kw_end = -1
+            for kw_lower in norm_kws:
+                pos = stripped_lower.find(kw_lower)
+                if pos < 0:
+                    continue
+                if anchor_start and pos > 6:
+                    continue
+                kw_end = pos + len(kw_lower)
+                break
+            if kw_end < 0:
+                continue
+            n = _first_plausible_number(stripped[kw_end:], min_abs=min_abs)
+            if n is None:
+                continue
+            total += n * unit
+            matched += 1
+            seen_lines.add(line_idx)
+    return total if matched > 0 else None
+
+
 # ── Page extraction (combined standard + rowwise pass) ──────────
 
 # Words within this many points of each other on the y-axis are treated as
@@ -722,6 +922,28 @@ ROWWISE_Y_TOLERANCE = 3
 # OCR's pixel scale at OCR_DPI=200 is ~3x pdfplumber's points; words on the
 # same baseline land within ~10px even for 12-point fonts.
 ROWWISE_Y_TOLERANCE_OCR = 10
+
+
+# OCR digit confusions Tesseract introduces in numeric strings. Only safe
+# to apply when adjacent to comma-formatted digits — applying globally
+# would mangle ordinary letters. Pattern: §,123 or 1§3,456 → 5,123 or
+# 153,456. Zain's 2024 image-rendered BS rendered "5,965,202" as
+# "§,965,202" and dropped the leading 5 from extraction.
+_OCR_DIGIT_FIXES = [(re.compile(r"§"), "5")]
+
+
+def _heal_ocr_digits(text):
+    """Apply OCR digit-confusion fixes only inside comma-formatted number
+    runs (so we don't rewrite real `§` if it appeared in narrative)."""
+    def _fix(m):
+        token = m.group(0)
+        for pat, repl in _OCR_DIGIT_FIXES:
+            token = pat.sub(repl, token)
+        return token
+    # Match runs that look like numbers but include a fixable garble
+    # (e.g. "§,965,202", "1§3,456"). Comma-separated thousand groups
+    # bracket the run, keeping ordinary letters untouched.
+    return re.sub(r"[§\d][§\d,]*,[§\d,]*", _fix, text)
 
 
 def _cluster_rows(words, y_key, x_key, y_tol):
@@ -792,7 +1014,7 @@ def _ocr_pages_dual(pdf_path, page_numbers):
         rowwise_text = "\n".join(
             " ".join(w["text"] for w in row) for row in rows
         )
-        out[pn] = (std_text, rowwise_text)
+        out[pn] = (_heal_ocr_digits(std_text), _heal_ocr_digits(rowwise_text))
     return out
 
 
@@ -1034,7 +1256,75 @@ def extract_shareholders_equity(pages):
         if n is not None:
             return n
     return None
-def extract_total_borrowings(pages):     return None
+def extract_total_borrowings(pages):
+    """Find total borrowings (interest-bearing debt + IFRS-16 lease liabilities).
+
+    yfinance / Tadawul define this as the sum of all interest-bearing debt
+    (long-term + current portion) plus IFRS-16 lease liabilities (long-term
+    + current portion). Banks substitute their funding instruments
+    (Sukuk Issued, Debt securities issued and term loans) for "Borrowings"
+    and explicitly exclude customer deposits, due-to-banks balances, and
+    AT1 hybrid capital (Equity Sukuk, Tier 1 Sukuk).
+
+    Two-stage strategy on BS pages (or whole doc when no BS detected):
+      1. Explicit single-line total ("Total borrowings (current and
+         non-current)") when present on the BS — Aramco prints this on a
+         capital-structure note inside the BS section.
+      2. Component summation: every BS line matching a borrowings or lease
+         component keyword contributes one value. Most issuers split
+         long-term / current portion / non-current lease / current lease
+         across 4 separate rows, so the sum reconstructs the consolidated
+         total.
+
+    Disqualifiers exclude: customer deposits / due-to-banks (bank funding,
+    not debt); Equity Sukuk / Tier 1 Sukuk (AT1 hybrid capital, classified
+    as equity); narrative "borrowing costs" / "incremental borrowing rate"
+    mentions; and asset-side debt instruments (FVOCI/FVPL securities, debt
+    investments).
+    """
+    bs_pages = _pages_matching_patterns(pages, BALANCE_SHEET_PATTERNS)
+    # Tighten to pages that actually carry the BS bottom-line. Notes
+    # pages (STC note 27, SNB liquidity notes, Bupa note 17) match the
+    # BS header pattern but contain maturity-table rows that would
+    # double-count borrowings under summation.
+    real_bs = [(pn, t) for pn, t in bs_pages if TOTAL_ASSETS_RX.search(t)]
+    # Restrict to the contiguous block of real BS pages at the start.
+    # The BS proper typically spans 1-2 consecutive pages (assets page
+    # + liabilities/equity page for Almarai); notes pages with "Total
+    # assets" mentions sit tens of pages later (Al Rajhi p95-96 maturity
+    # tables, SABIC p96 segment notes) and would double-count if included.
+    contiguous = []
+    prev_pn = None
+    for pn, t in real_bs:
+        if prev_pn is None or pn - prev_pn <= 2:
+            contiguous.append((pn, t))
+            prev_pn = pn
+        else:
+            break
+    if contiguous:
+        subset = contiguous
+    elif bs_pages:
+        subset = bs_pages
+    else:
+        subset = pages
+    # No Stage 1 explicit-total search: "Total borrowings" / "Total debt"
+    # match maturity-table subtotals (Jarir Note 11's "Total borrowings
+    # and term loans 39,696" gives the LT-only column, not the
+    # consolidated total) and other note-level rollups that aren't the
+    # BS-level total. Component summation on the actual BS page is more
+    # reliable across all 9 issuers.
+    #
+    # anchor_start=False: SABIC's BS rowwise-flattens left+right columns
+    # so "Total non-current assets ... Debt 22 26,165,086" puts the "Debt"
+    # keyword mid-line. Disqualifiers are strong enough (asset-side debt
+    # instruments, FVOCI/FVPL, customer deposits, AT1 hybrids, narrative
+    # borrowing-cost / borrowing-rate mentions) to keep mid-line search safe.
+    return _sum_components_in_pages(
+        subset,
+        BORROWINGS_COMPONENT_KEYWORDS + LEASE_COMPONENT_KEYWORDS,
+        exclude=BORROWINGS_DISQUALIFIERS,
+        anchor_start=False,
+    )
 def extract_cash_and_equivalents(pages): return None
 def extract_free_cash_flow(pages):       return None
 def extract_shares_outstanding(pages):   return None
