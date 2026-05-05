@@ -113,11 +113,11 @@ KEYWORDS = {
     "total_assets": [
         "Total assets", "إجمالي الأصول", "إجمالي الموجودات", "مجموع الموجودات",
     ],
-    "shareholders_equity": [
-        "Total shareholders' equity", "Total shareholders equity",
-        "Shareholders' equity", "Total equity",
-        "إجمالي حقوق المساهمين", "حقوق المساهمين", "إجمالي حقوق الملكية",
-    ],
+    # shareholders_equity uses SHAREHOLDERS_EQUITY_ATTRIBUTION_KEYWORDS +
+    # SHAREHOLDERS_EQUITY_DISQUALIFIERS module constants (extract_shareholders_
+    # equity runs them in stages). Empty placeholder kept for callers that
+    # introspect KEYWORDS.
+    "shareholders_equity": [],
     "total_borrowings": [
         "Total borrowings", "Total debt", "Long-term debt", "Borrowings",
         "إجمالي القروض", "مجموع القروض", "القروض",
@@ -218,6 +218,63 @@ NET_INCOME_TOTAL_DISQUALIFIERS = [
     re.compile(r"قبل\s+الزكاة"),
     re.compile(r"قبل\s+الضريبة"),
 ]
+
+
+# ── Shareholders' equity: parent-attributable preference ────────
+# Same pattern as net_income: yfinance / Tadawul report equity
+# attributable to ordinary equity holders of the parent (excluding
+# non-controlling interests). Almarai/SABIC/STC/SNB all show two
+# rows on the BS: parent-attributable first (the canonical figure),
+# then a "Total equity" line below that includes minority interests.
+# The parent-attributable phrasing varies by issuer: "of the Parent"
+# (most), "of the Bank" (banks), "of the Company" (some).
+SHAREHOLDERS_EQUITY_ATTRIBUTION_KEYWORDS = _expand_arabic([
+    "Equity attributable to equity holders of the Parent Company",
+    "Equity attributable to the equity holders of the Parent Company",
+    "Equity attributable to equity holders of the parent",
+    "Equity attributable to the equity holders of the parent",
+    "Equity attributable to shareholders of the parent",
+    "Equity attributable to equity holders of the Bank",
+    "Equity attributable to the equity holders of the Bank",
+    "Equity attributable to shareholders of the Bank",
+    "Equity attributable to equity holders of the Company",
+    "Equity attributable to the equity holders of the Company",
+    "Equity attributable to shareholders of the Company",
+    "Equity attributable to equity holders",
+    "Equity attributable to shareholders",
+    # Arabic
+    "حقوق الملكية العائدة لمساهمي الشركة الأم",
+    "حقوق المساهمين العائدة لمساهمي الشركة الأم",
+    "حقوق الملكية العائدة لمساهمي البنك",
+    "حقوق المساهمين العائدة للشركة الأم",
+])
+SHAREHOLDERS_EQUITY_TOTAL_KEYWORDS = _expand_arabic([
+    "Total shareholders' equity", "Total shareholders equity",
+    "Net shareholders' equity",
+    "Shareholders' equity", "Shareholders equity",
+    "Total equity",
+    "إجمالي حقوق المساهمين", "حقوق المساهمين", "إجمالي حقوق الملكية",
+])
+# Lines that look like the equity total but aren't — "Total equity and
+# liabilities" (= total_assets), "Total equity and net debt" (Aramco's
+# gearing-ratio explainer). Without these, the substring-match
+# "Total equity" picks up the BS subtotal line that equals total_assets
+# (SABIC/Almarai/STC all collapsed to total_assets value before this).
+SHAREHOLDERS_EQUITY_DISQUALIFIERS = [
+    re.compile(r"equity\s+and\s+liabilit", re.I),
+    re.compile(r"equity\s+and\s+net\s+debt", re.I),
+    re.compile(r"liabilities\s+and\s+(?:shareholders|equity)", re.I),
+    re.compile(r"حقوق\s+الملكية\s+و\s*الالتزامات"),
+]
+# Aramco's BS uses unlabeled subtotal rows: after the equity component
+# rows (Share capital, Reserves, …) the parent-attributable subtotal sits
+# on its own line as just numbers, with no row label. The walk starts
+# from the "Shareholders' equity" section header and returns the first
+# numeric-only line below it (skipping labeled component rows, stopping
+# at any disqualifier).
+SHAREHOLDERS_EQUITY_HEADER_RX = re.compile(
+    r"^shareholders'?\s*equity\s*$", re.I
+)
 
 
 # ── EPS: total (basic) earnings per share ───────────────────────
@@ -409,6 +466,17 @@ def _pages_matching_patterns(pages, patterns):
 
 # ── Keyword-based value lookup ──────────────────────────────────
 
+_APOSTROPHE_RX = re.compile(r"['’‘′ʼ`]")
+
+
+def _normalize_apostrophes(s):
+    """Collapse all apostrophe-like characters to a single canonical form.
+    PDFs and OCR output mix straight ('), curly (’), prime (′), modifier
+    letter (ʼ), and backtick (`). Normalizing to ' lets keyword matching
+    work regardless of which variant the source used."""
+    return _APOSTROPHE_RX.sub("'", s)
+
+
 def _value_near_keyword(text, keywords, *,
                         anchor_start=True, last=False, exclude=(),
                         min_abs=100, max_abs=float("inf"),
@@ -502,8 +570,13 @@ def _value_near_keyword(text, keywords, *,
                 return n
         return None
 
+    # Normalize apostrophe variants on the entire text once. The kw_lower
+    # below also gets normalized so curly/straight-apostrophe mismatches
+    # between the keyword list and the PDF text (Jarir's "Net shareholders'
+    # equity" with curly ’) don't kill the match.
+    text = _normalize_apostrophes(text)
     for kw in keywords:
-        kw_lower = kw.lower()
+        kw_lower = _normalize_apostrophes(kw).lower()
         candidate = None
         lines = text.splitlines()
         for i, line in enumerate(lines):
@@ -579,6 +652,65 @@ def _extract_in_pages(pages_subset, keywords, *,
         n = _value_near_keyword(text, keywords, **kwargs)
         if n is not None:
             return n if skip_unit else n * _detect_unit(text)
+    return None
+
+
+# Lines that have NO alphabetic characters (Latin or Arabic) — purely
+# numeric/punctuation rows. These are the unlabeled subtotals Aramco
+# uses on its BS where the parent-attributable equity is just numbers
+# without a row label.
+_HAS_LETTERS_RX = re.compile(r"[A-Za-z؀-ۿ]")
+_NUMERIC_ONLY_RX = re.compile(r"^[\d,.()\s\-]+$")
+
+
+def _extract_unlabeled_subtotal(pages_subset, header_rx, *,
+                                exclude=(), max_walk=12, min_abs=100):
+    """Find the first unlabeled numeric subtotal line after a header.
+
+    Aramco's BS has the parent-attributable equity rendered as a label-less
+    number row sandwiched between the equity component lines (Share
+    capital, Reserves) and the disqualified 'Total equity and liabilities'
+    line. Standard keyword search can't find a number with no row label,
+    so we walk forward from the section header instead.
+
+    For each page in the subset:
+      1. Find a line matching header_rx (e.g. '^Shareholders' equity$').
+      2. Walk up to max_walk lines forward.
+      3. Skip blank lines and labeled rows (anything with letters).
+      4. Stop on any disqualifier match.
+      5. Return the first plausible number on the first numeric-only row.
+
+    Returns the number scaled by the page's unit multiplier, or None.
+    """
+    for _, text in pages_subset:
+        normalized = _normalize_apostrophes(text)
+        lines = normalized.splitlines()
+        for i, line in enumerate(lines):
+            if not header_rx.match(line.strip()):
+                continue
+            for j in range(1, max_walk + 1):
+                if i + j >= len(lines):
+                    break
+                nxt = lines[i + j].strip()
+                if not nxt:
+                    continue
+                if exclude and any(p.search(nxt) for p in exclude):
+                    break
+                if _HAS_LETTERS_RX.search(nxt):
+                    continue  # labeled component row
+                if not _NUMERIC_ONLY_RX.match(nxt):
+                    continue  # not a clean number-only row
+                healed = re.sub(r"(\d)\s+\.(\d)", r"\1.\2", nxt)
+                for m in NUMBER_RE.finditer(healed):
+                    n = _parse_number(m.group(0))
+                    if n is None:
+                        continue
+                    if 2010 <= n <= 2099 and n == int(n):
+                        continue
+                    if abs(n) < min_abs:
+                        continue
+                    return n * _detect_unit(text)
+                break  # numeric-only row but no plausible number — give up
     return None
 
 
@@ -829,7 +961,79 @@ def extract_total_assets(pages):
     if bs_pages:
         return _extract_in_pages(bs_pages, keywords, last=True, next_line_fallback=True)
     return _extract_in_pages(pages, keywords, last=True, next_line_fallback=True)
-def extract_shareholders_equity(pages):  return None
+def extract_shareholders_equity(pages):
+    """Find shareholders' equity, preferring parent-attributable when reported.
+
+    Two-stage strategy per page subset (BS pages first, then whole doc):
+      1. Equity-attribution keywords ("Equity attributable to equity
+         holders of the parent / Bank / Company"). Matches yfinance and
+         Tadawul convention which excludes non-controlling interests.
+      2. Total-equity keywords ("Total shareholders' equity",
+         "Total equity", "Net shareholders' equity") as a fallback for
+         issuers without an explicit attribution row (Zain, Bupa).
+
+    Both stages apply SHAREHOLDERS_EQUITY_DISQUALIFIERS to skip lines
+    like "Total equity and liabilities" (= total_assets) and Aramco's
+    "Total equity and net debt" gearing-ratio narrative — without this,
+    the substring-match "Total equity" was collapsing to the BS subtotal.
+
+    next_line_fallback is OFF here on purpose: when the keyword line has
+    no value (Aramco's "Shareholders' equity" header), the next visual
+    row tends to be Share capital, not the consolidated total — peeking
+    forward grabs the wrong number.
+    """
+    bs_pages = _pages_matching_patterns(pages, BALANCE_SHEET_PATTERNS)
+    # Stage 2 uses anchor_start=False because SABIC's BS lays out assets
+    # left + equity right as 2 columns; pdfplumber flattens them into
+    # rows where the attribution phrase lands mid-line. Same fix net_income
+    # already uses for the analogous IS layout. Disqualifiers keep the
+    # mid-line search safe (won't match "Total equity and liabilities").
+    stages = [
+        (SHAREHOLDERS_EQUITY_ATTRIBUTION_KEYWORDS,
+         dict(last=True, anchor_start=True, exclude=SHAREHOLDERS_EQUITY_DISQUALIFIERS)),
+        (SHAREHOLDERS_EQUITY_ATTRIBUTION_KEYWORDS,
+         dict(last=True, anchor_start=False, exclude=SHAREHOLDERS_EQUITY_DISQUALIFIERS)),
+        (SHAREHOLDERS_EQUITY_TOTAL_KEYWORDS,
+         dict(last=True, anchor_start=True, exclude=SHAREHOLDERS_EQUITY_DISQUALIFIERS)),
+    ]
+    if bs_pages:
+        # Stages 1 + 2: attribution keywords (parent-attributable preference).
+        for keywords, kwargs in stages[:2]:
+            n = _extract_in_pages(bs_pages, keywords, **kwargs)
+            if n is not None:
+                return n
+        # Stage 4: Aramco-style unlabeled subtotal walk. Must run BEFORE
+        # the generic "Total equity" stage — Aramco's BS-pattern match
+        # also catches a notes/MDA page (~31) where "Total equity
+        # 1,651,355" is labeled but represents the consolidated total
+        # incl. NCI, not the parent-attributable figure we want. The
+        # walk's strict ^Shareholders' equity$ header regex only fires
+        # on label-only section headers (Aramco-style), so it stays
+        # silent for issuers with conventional labeled subtotals.
+        n = _extract_unlabeled_subtotal(
+            bs_pages, SHAREHOLDERS_EQUITY_HEADER_RX,
+            exclude=SHAREHOLDERS_EQUITY_DISQUALIFIERS,
+        )
+        if n is not None:
+            return n
+        # Stage 3: total/general equity keywords as fallback.
+        for keywords, kwargs in stages[2:]:
+            n = _extract_in_pages(bs_pages, keywords, **kwargs)
+            if n is not None:
+                return n
+        # Returning None here lets extract_all's rowwise/standard merge
+        # surface the rowwise-pass value instead of falling through to a
+        # notes/MDA page. Habib's BS is column-layout — standard pass
+        # gets nothing from BS page 8, but whole-doc fallback would
+        # grab a wrong "9,046,759,054" from a segment-table row.
+        return None
+    # Whole-doc fallback only when no BS-pattern page was detected at
+    # all — older filings or unusual section headers.
+    for keywords, kwargs in stages:
+        n = _extract_in_pages(pages, keywords, **kwargs)
+        if n is not None:
+            return n
+    return None
 def extract_total_borrowings(pages):     return None
 def extract_cash_and_equivalents(pages): return None
 def extract_free_cash_flow(pages):       return None
