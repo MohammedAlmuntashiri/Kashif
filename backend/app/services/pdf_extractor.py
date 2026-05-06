@@ -352,6 +352,107 @@ EPS_DISQUALIFIERS = [
 ]
 
 
+# ── Shares outstanding: keywords + disqualifiers ────────────────
+# yfinance reports "Ordinary Shares Number" from the BS equity section,
+# which corresponds to weighted-average basic shares (EPS note) or issued
+# shares (BS). Most Saudi IFRS filings show weighted-average shares in the
+# EPS note on the income statement / notes pages — that's the primary source.
+# The BS equity section shows issued shares as a secondary source.
+#
+# Unit handling: share counts on SAR'000 pages are expressed in thousands
+# (4,176,000 = 4.176B shares), so unit scaling applies. But some PDFs print
+# the full count (4,176,000,000) even on a SAR'000 page — the raw value is
+# already in shares. extract_shares_outstanding validates the scaled result
+# and falls back to the unscaled value when scaling produces an implausible count.
+SHARES_OUTSTANDING_KEYWORDS = _expand_arabic([
+    # EPS-note phrasing — most specific, typically on IS / notes pages
+    "Weighted average number of shares outstanding",
+    "Weighted average number of ordinary shares outstanding",
+    "Weighted average number of ordinary shares used in computing basic earnings per share",
+    "Weighted average number of shares used in computing basic earnings per share",
+    "Weighted average number of shares used in computing earnings per share",
+    "Weighted average number of ordinary shares",
+    "Weighted average number of shares",
+    "Weighted-average number of ordinary shares",
+    "Weighted-average number of shares",
+    # Balance sheet equity section
+    "Number of ordinary shares issued and outstanding",
+    "Number of shares issued and outstanding",
+    "Number of ordinary shares outstanding",
+    "Number of shares outstanding",
+    # Al Rajhi 2024 uses this reversed phrasing: "Number of outstanding shares"
+    "Number of outstanding ordinary shares",
+    "Number of outstanding shares",
+    "Number of ordinary shares issued",
+    "Number of shares issued",
+    "Number of ordinary shares",
+    "Number of shares",
+    # Generic fallbacks
+    "Shares issued and outstanding",
+    "Shares outstanding",
+    "Issued ordinary shares",
+    "Issued shares",
+    # Arabic
+    "المتوسط المرجح لعدد الأسهم العادية القائمة",
+    "المتوسط المرجح لعدد الأسهم العادية",
+    "المتوسط المرجح لعدد الأسهم",
+    "عدد الأسهم العادية القائمة",
+    "عدد الأسهم العادية الصادرة والقائمة",
+    "عدد الأسهم العادية المصدرة",
+    "عدد الأسهم العادية",
+    "عدد الأسهم القائمة",
+    "عدد الأسهم المصدرة",
+    "عدد الأسهم",
+    "الأسهم المصدرة",
+])
+# Inline unit qualifier embedded in a share-count label (e.g. Aramco's
+# "Weighted average number of ordinary shares (in millions) ... 241,894").
+# The page-level SAR unit (thousands/millions) applies to monetary values;
+# the share count may carry its own "(in millions)" or "(in thousands)"
+# qualifier that must override the page unit for this specific line.
+_SHARES_INLINE_UNIT_RX = re.compile(r"\(\s*in\s+(millions?|thousands?)\s*\)", re.I)
+# Matches narrative share counts like "150 million shares" or "150 million ordinary shares"
+# (Bupa 2024: shares appear only in prose, never in a standalone table row).
+_SHARES_MILLION_NARRATIVE_RX = re.compile(
+    r"(\d+(?:\.\d+)?)\s+million\s+(?:ordinary\s+)?shares?",
+    re.I
+)
+
+# Lines that match share keywords but are not the share count we want.
+SHARES_DISQUALIFIERS = [
+    re.compile(r"treasury\s+shares?", re.I),
+    re.compile(r"\bown\s+shares?", re.I),
+    re.compile(r"\bper\s+share\b", re.I),          # EPS/DPS value lines; applied to
+                                                    # line-minus-keyword so keywords
+                                                    # containing "per share" don't
+                                                    # self-disqualify (see _try_pages)
+    re.compile(r"\bshare\s+capital\b", re.I),       # SAR monetary value, not count
+    re.compile(r"\bshare\s+premium\b", re.I),
+    re.compile(r"\bauthorized\s+(?:share\s+)?capital\b", re.I),
+    re.compile(r"\bunissued\s+shares?\b", re.I),
+    re.compile(r"(?:purchase|repurchase|buyback)[ds]?\s+(?:of\s+)?(?:own\s+)?shares?", re.I),
+    # Movement-table temporal phrases — next_line_fallback must stop here so
+    # it doesn't capture "Beginning of the year 10,841" from a treasury-shares
+    # movement schedule (SNB p75: generic "Number of shares" keyword reached
+    # this line 3 rows down and captured net-income as share count).
+    re.compile(r"\bbeginning\s+of\s+(?:the\s+)?(?:year|period)\b", re.I),
+    re.compile(r"\bend\s+of\s+(?:the\s+)?(?:year|period)\b", re.I),
+    re.compile(r"\bopening\s+balance\b", re.I),
+    re.compile(r"\bclosing\s+balance\b", re.I),
+]
+# Stage-2 fallback: same list but without the "per share" disqualifier.
+# Used when Stage 1 (strict) finds nothing — catches companies like STC/Zain
+# whose only weighted-average share count line is the EPS computation row
+# whose label contains "per share" (e.g. "...used in computing basic
+# earnings per share: 4,986,034,000"). SNB is not affected because its
+# standalone "Weighted average number of shares: 5,944,649" line (which has
+# no "per share") is always found in Stage 1 before Stage 2 runs.
+_SHARES_DISQ_NO_PER_SHARE = [
+    p for p in SHARES_DISQUALIFIERS
+    if r"\bper\s+share\b" not in p.pattern
+]
+
+
 # ── Total borrowings: sum of debt + IFRS-16 lease liabilities ───
 # yfinance / Tadawul define total_borrowings as interest-bearing debt
 # plus IFRS-16 lease liabilities (current and non-current). The
@@ -1720,7 +1821,129 @@ def extract_free_cash_flow(pages):
         capex = -capex
 
     return ocf + capex  # capex is negative → effective subtraction
-def extract_shares_outstanding(pages):   return None
+def extract_shares_outstanding(pages):
+    """Find shares outstanding (weighted-average basic or issued share count).
+
+    Keyword-major search (most-specific keyword wins) over IS pages (EPS notes),
+    then BS pages, then whole doc. anchor_start=True first, False fallback.
+
+    Unit handling — three-layer logic per matched line:
+      1. Inline unit: if the keyword line itself contains "(in millions)" or
+         "(in thousands)" (e.g. Aramco: "...ordinary shares (in millions) 241,894"),
+         that qualifier overrides the page-level SAR unit for this line only.
+         Without this, the SAR'000 page unit gives 241,894 x 1,000 = 241.9M
+         instead of the correct 241.9B.
+      2. Page unit: the page's declared SAR unit (SAR'000, "in thousands", etc.)
+         applied when no inline qualifier is present.
+      3. Raw fallback: if the scaled result is outside [1M, 500B] but the raw
+         number itself is in range, return the raw value (handles PDFs that print
+         the full share count on a SAR'000 page — the count is already in shares).
+
+    _MAX_SHARES = 500B covers Saudi Aramco's 242 billion ordinary shares.
+
+    next_line_fallback handles column-layout PDFs (Jarir, Habib) where the value
+    is on the line below the keyword label.
+    """
+    _MIN_SHARES = 1_000_000          # 1M — smallest plausible Tadawul-listed company
+    _MAX_SHARES = 500_000_000_000    # 500B — covers Aramco's 242B ordinary shares
+
+    kw_lowers = [_normalize_apostrophes(kw).lower() for kw in SHARES_OUTSTANDING_KEYWORDS]
+
+    def _try_pages(subset, anchor_start, disqualifiers):
+        for kw, kw_lower in zip(SHARES_OUTSTANDING_KEYWORDS, kw_lowers):
+            for _, text in subset:
+                text_norm = _normalize_apostrophes(text)
+                page_unit = _detect_unit(text_norm)
+                all_lines = text_norm.splitlines()
+                for line_idx, line in enumerate(all_lines):
+                    stripped = line.strip()
+                    if not stripped:
+                        continue
+                    # Full-line disqualifier check. "per share" is applied to the
+                    # whole line so that SNB's EPS table row (which puts net income
+                    # before share count on a line whose label contains "per share")
+                    # is excluded in Stage 1 — forcing the extractor to find SNB's
+                    # standalone "Weighted average number of shares: 5,944,649" line.
+                    if any(p.search(stripped) for p in disqualifiers):
+                        continue
+                    stripped_lower = stripped.lower()
+                    pos = stripped_lower.find(kw_lower)
+                    if pos < 0:
+                        continue
+                    if anchor_start and pos > 6:
+                        continue
+                    after = stripped[pos + len(kw):]
+
+                    # Inline unit override: "(in millions)" / "(in thousands)"
+                    # embedded in the label (e.g. Aramco: "...shares (in millions) 241,894").
+                    inline_m = _SHARES_INLINE_UNIT_RX.search(after)
+                    if inline_m:
+                        w = inline_m.group(1).lower()
+                        effective_unit = 1_000_000 if "million" in w else 1_000
+                    else:
+                        effective_unit = page_unit
+
+                    # Narrative "X million shares" pattern (Bupa: shares appear only
+                    # in prose — "amounting to 150 million shares"). If matched, the
+                    # number is already scaled to actual share count; skip normal extraction.
+                    narrative_m = _SHARES_MILLION_NARRATIVE_RX.search(after)
+                    if narrative_m:
+                        n_narrative = float(narrative_m.group(1)) * 1_000_000
+                        if _MIN_SHARES <= n_narrative <= _MAX_SHARES:
+                            return n_narrative
+
+                    n = _first_plausible_number(after, min_abs=100, require_decimal=False)
+                    if n is None:
+                        # next_line_fallback: value below the label (column-layout PDFs)
+                        for j in range(1, 4):
+                            if line_idx + j >= len(all_lines):
+                                break
+                            nxt = all_lines[line_idx + j].strip()
+                            if not nxt:
+                                continue
+                            if any(p.search(nxt) for p in disqualifiers):
+                                break
+                            n = _first_plausible_number(nxt, min_abs=100,
+                                                        require_decimal=False)
+                            if n is not None:
+                                break
+                    if n is None or n <= 0:
+                        continue
+
+                    scaled = n * effective_unit
+                    if _MIN_SHARES <= scaled <= _MAX_SHARES:
+                        return scaled
+                    # Raw fallback: share count already in full units on this page
+                    if _MIN_SHARES <= n <= _MAX_SHARES:
+                        return n
+        return None
+
+    income_pages = _pages_matching_patterns(pages, INCOME_STATEMENT_PATTERNS)
+    bs_pages = _pages_matching_patterns(pages, BALANCE_SHEET_PATTERNS)
+    subsets = (income_pages, bs_pages, pages)
+
+    # Stage 1 — strict: full SHARES_DISQUALIFIERS including "per share".
+    # SNB has a standalone "Weighted average shares: 5,944,649" line (no "per share")
+    # that is found here. The EPS table row (net income first, then shares, then EPS,
+    # all on one "per share" line) is correctly excluded, preventing 10,841 (net income)
+    # from being captured instead of the share count.
+    for subset in subsets:
+        for anchor_start in (True, False):
+            n = _try_pages(subset, anchor_start, SHARES_DISQUALIFIERS)
+            if n is not None:
+                return n
+
+    # Stage 2 — permissive: "per share" removed from disqualifiers.
+    # Catches companies like STC and Zain whose ONLY weighted-average share count
+    # line is the EPS computation row ("...used in computing basic earnings per share:
+    # 4,986,034,000"). SNB never reaches Stage 2 because Stage 1 already returned.
+    for subset in subsets:
+        for anchor_start in (True, False):
+            n = _try_pages(subset, anchor_start, _SHARES_DISQ_NO_PER_SHARE)
+            if n is not None:
+                return n
+
+    return None
 def extract_dividends_per_share(pages):  return None
 
 
@@ -1788,4 +2011,21 @@ def extract_all(pdf_path):
             result[name] = r
         else:
             result[name] = s
+
+    # Cross-validate shares_outstanding against EPS and net_income.
+    # If extracted_shares × EPS is ~1000× too small relative to net_income,
+    # the page unit was missed (e.g. Jarir: "1,200,000" on a SAR'000 page
+    # instead of 1,200,000,000). Scale up by 1,000 when the corrected ratio
+    # falls within 30% of 1.0. The [0.7, 1.5] band is intentionally loose
+    # because EPS may exclude AT1 sukuk payments (Al Rajhi) or treasury shares.
+    _s = result.get("shares_outstanding")
+    _e = result.get("eps")
+    _n = result.get("net_income")
+    if (_s and _e and _n
+            and abs(_e) > 0.01 and abs(_n) > 0
+            and abs(_s * _e) / abs(_n) < 0.01):
+        _s_scaled = _s * 1_000
+        if 0.7 <= abs(_s_scaled * _e) / abs(_n) <= 1.5:
+            result["shares_outstanding"] = _s_scaled
+
     return result
