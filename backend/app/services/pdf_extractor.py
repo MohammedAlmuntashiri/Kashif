@@ -145,8 +145,16 @@ KEYWORDS = {
         "عدد الأسهم", "الأسهم المصدرة", "المتوسط المرجح لعدد الأسهم",
     ],
     "dividends_per_share": [
-        "Dividends per share", "DPS", "Dividend per share",
+        # Specific totals first so they win over quarterly-tranche labels
+        "Dividends declared per share",
+        "Total dividends per share",
+        "Cash dividends per share",
+        "Dividends per ordinary share",
+        "Dividends per share",
+        "Dividend per share",
+        "DPS",
         "توزيعات الأرباح للسهم", "توزيعات أرباح السهم",
+        "توزيع الأرباح للسهم",
     ],
 }
 
@@ -350,6 +358,83 @@ EPS_DISQUALIFIERS = [
     re.compile(r"قبل\s+الزكاة"),
     re.compile(r"قبل\s+الضريبة"),
 ]
+
+
+# ── Dividends per share: page detection + prose/table patterns ──
+# Saudi annual reports do NOT use a standard labeled "Dividends per share: X.XX"
+# row. Instead, DPS appears as:
+#   (a) A table "Total" row with quarterly columns (Aramco)
+#   (b) A "(SAR per share)" column-header table of dated payment rows (SNB)
+#   (c) Prose "SAR/SR/Saudi Riyals X.XX per share" with year context (most others)
+#   (d) Prose "at X.XX per share" with year context (SABIC appropriations note)
+DIVIDEND_NOTE_PATTERNS = [
+    re.compile(r"^\s*\d+[\.\s]+DIVIDEND", re.I | re.M),
+    re.compile(r"DIVIDENDS?\s+(?:APPROVED\s+AND\s+PAID|PROPOSED|AND\s+DIVIDEND\s+PAYABLE|DECLARED\s+AND\s+PAID)", re.I),
+    re.compile(r"^\s*DIVIDEND\s+(?:AND\s+DIVIDEND\s+PAYABLE|DISTRIBUTION)\b", re.I | re.M),
+    # "- Dividends" bullet header used by Al Rajhi and some banks
+    re.compile(r"^[-–]\s*Dividends?\b", re.I | re.M),
+    # SABIC uses "40. APPROPRIATIONS" for its dividend distribution note
+    re.compile(r"^\s*\d+[\.\s]+APPROPRIATIONS\b", re.I | re.M),
+]
+
+# Primary prose pattern: "SAR/SR/Saudi Riyals X.XX per [ordinary] share[s]"
+_DPS_SAR_RX = re.compile(
+    r"(?:SAR|SR|Saudi\s+Riyals?)\s+([\d,]+(?:\.\d+)?)\s+per\s+(?:ordinary\s+)?shares?\b",
+    re.I
+)
+# Secondary prose pattern: "at X.XX per share" (SABIC appropriations note style)
+_DPS_AT_RX = re.compile(r"\bat\s+([\d,]+(?:\.\d+)?)\s+per\s+share\b", re.I)
+# Fiscal-year qualifier: "2024" on the same line
+_DPS_YEAR_RX = re.compile(r"\b2024\b")
+# "(SAR per share)" column-header in a SNB-style dated-payment table
+_DPS_COL_HEADER_RX = re.compile(r"\(\s*SAR\s+per\s+share\s*\)", re.I)
+# "SAR per share" as a STANDALONE column header (no surrounding parens) — Aramco quarterly table
+_DPS_ARAMCO_HDR_RX = re.compile(r"^SAR\s+per\s+share\s*$", re.I | re.M)
+# Numbers with a decimal point (avoids capturing day/date integers like 31)
+_DPS_DECIMAL_RX = re.compile(r"\d+\.\d+")
+# General number extractor (integers + decimals)
+_DPS_NUM_RX = re.compile(r"\d[\d,]*(?:\.\d+)?")
+# "paid on … 2024" — distinguishes actual 2024 payments from comparison-year entries
+_DPS_PAID_2024_RX = re.compile(r"paid\s+on\b[^.]*?\b2024\b", re.I)
+
+DPS_PROSE_DISQUALIFIERS = [
+    re.compile(r"\bfair\s+value\b", re.I),
+    re.compile(r"\bgrant(?:ed)?\s+(?:date|price)\b", re.I),
+    re.compile(r"\bearning[s]?\s+per\s+share\b", re.I),
+    re.compile(r"\bbasic\s+(?:and\s+diluted\s+)?earning\b", re.I),
+    re.compile(r"\bmarket\s+(?:price|value)\b", re.I),
+    re.compile(r"\bface\s+value\b", re.I),
+    re.compile(r"\bpar\s+value\b", re.I),
+    re.compile(r"\bbook\s+value\b", re.I),
+    re.compile(r"\bfor\s+each\s+quarter\b", re.I),
+    re.compile(r"\bper\s+quarter\b", re.I),
+    re.compile(r"\bon\s+a\s+quarterly\s+basis\b", re.I),  # policy-description line (STC)
+    re.compile(r"\bfor\s+the\s+(?:first|second|third|fourth|\d(?:st|nd|rd|th))\s+quarter\b", re.I),
+    re.compile(r"\bfor\s+the\s+(?:1st|2nd|3rd|4th)\s+quarter\b", re.I),
+]
+
+# Quarterly-batch DPS computation (STC-style): "SR X per share for each quarter"
+_DPS_EACH_QUARTER_RX = re.compile(
+    r"(?:SR|SAR)\s+([\d.]+)\s+per\s+share\s+for\s+each\s+quarter",
+    re.I
+)
+# Count distinct quarter ordinal words (one ordinal = one quarter period)
+_DPS_QUARTER_ORDINAL_RX = re.compile(
+    r"\b(?:first|second|third|fourth|1st|2nd|3rd|4th)\b",
+    re.I
+)
+# Sentence splitter for Stage 3c (period/! followed by whitespace)
+_DPS_SENT_SPLIT_RX = re.compile(r"(?<=[.!?])\s+")
+# "total interim dividends" — marks an explicit annual-total statement (SABIC)
+# Multi-line DOTALL pattern: "total interim dividends for the year 2024 ... at X per share"
+# Handles SABIC's two-column layout where pdfplumber interleaves lease-table rows
+# with the appropriations note, breaking the sentence across non-adjacent lines.
+_DPS_ANNUAL_TOTAL_RX = re.compile(
+    r"total\s+interim\s+dividends\s+for\s+the\s+year\s+2024\b.{0,1000}?\bat\s+([\d.]+)\s+per\s+share",
+    re.I | re.DOTALL
+)
+# Subsequent-year marker — exclude values from 2025+ post-reporting-period events
+_DPS_FUTURE_YEAR_RX = re.compile(r"\b20(?:25|26|27|28|29)\b")
 
 
 # ── Shares outstanding: keywords + disqualifiers ────────────────
@@ -1944,7 +2029,198 @@ def extract_shares_outstanding(pages):
                 return n
 
     return None
-def extract_dividends_per_share(pages):  return None
+def extract_dividends_per_share(pages):
+    """Find annual dividends per share (ordinary shares).
+
+    Stage 1 — Aramco quarterly-column table "Total" row:
+      Only fires on pages with a standalone "SAR per share" column header.
+      Strips the "Total[footnote]" prefix before scanning for numbers so the
+      footnote digit is not mistaken for a per-share value.
+
+    Stage 2 — SNB "(SAR per share)" column-header table:
+      Sums values with a decimal point from rows whose date column says "2024".
+      Requiring a decimal avoids adding day-integers like "31" from date strings.
+
+    Stage 3a — Al Rajhi "paid on 2024" forward-context sum (div_pages only):
+      For each per-share value in the dividend note, looks forward 5 lines for
+      "paid on … 2024". Sums only such values — correctly includes H2 2023
+      dividend paid in April 2024 alongside H1 2024 dividend paid in August 2024
+      (= 2.40 total) while excluding H1 2023 / H2 2022 payments dated 2023.
+
+    Stage 3b — Prose with "2024" on same line (all pages, last-match):
+      Covers Jarir, Zain, Almarai, Bupa, SABIC. Last-match so an explicit
+      annual-total statement beats an earlier partial-period mention.
+
+    Stage 4 — Dividend note last-match (no year qualifier, fallback).
+    """
+    div_pages = _pages_matching_patterns(pages, DIVIDEND_NOTE_PATTERNS)
+    search_pages = div_pages or pages
+    _min, _max = 0.01, 100.0
+
+    def _parse(s):
+        try:
+            return float(s.replace(",", ""))
+        except (ValueError, AttributeError):
+            return None
+
+    def _from_line(line):
+        for rx in (_DPS_SAR_RX, _DPS_AT_RX):
+            m = rx.search(line)
+            if m:
+                v = _parse(m.group(1))
+                if v and _min <= v <= _max:
+                    return v
+        return None
+
+    def _is_disqualified(line):
+        return any(p.search(line) for p in DPS_PROSE_DISQUALIFIERS)
+
+    # ── Stage 1: Aramco quarterly-column "Total" row ────────────────
+    # Only fires on pages that have "SAR per share" as a standalone column
+    # header — avoids false hits on balance-sheet or other Total rows.
+    for _, text in search_pages:
+        if not _DPS_ARAMCO_HDR_RX.search(text):
+            continue
+        for line in text.splitlines():
+            stripped = line.strip()
+            m = re.match(r"Total\d*\s+(.*)", stripped, re.I)
+            if not m:
+                continue
+            rest = m.group(1)           # everything after "Total[footnote] "
+            nums = [_parse(t) for t in _DPS_NUM_RX.findall(rest)]
+            in_range = [v for v in nums if v and _min <= v <= _max]
+            if in_range:
+                return in_range[0]      # first = 2024 column value
+
+    # ── Stage 2: SNB "(SAR per share)" column-header table ──────────
+    # Require decimal point so day integers ("31" from "31 December 2024")
+    # are not summed as per-share amounts.
+    for _, text in search_pages:
+        if not _DPS_COL_HEADER_RX.search(text):
+            continue
+        total, found = 0.0, False
+        for line in text.splitlines():
+            if not _DPS_YEAR_RX.search(line):
+                continue
+            for tok in _DPS_DECIMAL_RX.findall(line):  # decimal values only
+                v = _parse(tok)
+                if v and _min <= v <= _max:
+                    total += v
+                    found = True
+                    break
+        if found and _min <= total <= 20:
+            return round(total, 4)
+
+    # ── Stage 3a: "paid on 2024" forward-context sum (div_pages) ────
+    # Specifically handles banks / semi-annual payers (Al Rajhi) where the
+    # same dividend note lists both current-year and prior-year payments.
+    # Looks forward up to 5 lines for "paid on … 2024" to confirm payment
+    # actually occurred in the current reporting year.
+    for _, text in div_pages:
+        lines = text.splitlines()
+        total, found = 0.0, False
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped or _is_disqualified(stripped):
+                continue
+            v = _from_line(stripped)
+            if not v:
+                continue
+            forward = " ".join(lines[idx + 1: idx + 6])
+            if _DPS_PAID_2024_RX.search(forward):
+                total += v
+                found = True
+        if found and _min <= total <= 20:
+            return round(total, 4)
+
+    # ── Stage 3c: quarterly-batch summation (STC-style) ─────────────
+    # "SR X per share for each quarter" + N named quarters = N×X quarterly sub-total.
+    # Ordinals are counted at SENTENCE level (not full line) so policy-range ordinals
+    # ("starting from 4th quarter of 2021") on adjacent lines are excluded.
+    # Additional dividends are found in OTHER sentences in the same ±2-line window,
+    # excluding any sentence that references a future year (2025+).
+    # STC 2024: 4 quarters × 0.40 + SR 1 extra = 2.60.
+    for _, text in div_pages:
+        lines = text.splitlines()
+        for idx, line in enumerate(lines):
+            stripped = line.strip()
+            if not _DPS_EACH_QUARTER_RX.search(stripped):
+                continue
+            # Reconstruct window (±2 lines) and split into sentences
+            window = " ".join(l.strip() for l in lines[max(0, idx - 2): idx + 3] if l.strip())
+            sentences = _DPS_SENT_SPLIT_RX.split(window)
+            target = next((s for s in sentences if _DPS_EACH_QUARTER_RX.search(s)), None)
+            if not target:
+                continue
+            m_q = _DPS_EACH_QUARTER_RX.search(target)
+            rate = float(m_q.group(1))
+            q_count = len(_DPS_QUARTER_ORDINAL_RX.findall(target))
+            if q_count < 2:
+                continue
+            quarterly_sub = round(q_count * rate, 4)
+            # Sum additional dividends from other sentences in the window,
+            # excluding future-year subsequent-event sentences
+            additional = 0.0
+            for sent in sentences:
+                if sent == target:
+                    continue
+                if _is_disqualified(sent) or _DPS_FUTURE_YEAR_RX.search(sent):
+                    continue
+                if _DPS_EACH_QUARTER_RX.search(sent):
+                    continue
+                v2 = _from_line(sent)
+                if v2 and abs(v2 - rate) > 0.001:
+                    additional += v2
+            total_dps = quarterly_sub + additional
+            if _min <= total_dps <= 20:
+                return round(total_dps, 4)
+
+    # ── Stage 3b-total: DOTALL search for annual-total statement (SABIC) ───
+    # SABIC's two-column page layout causes pdfplumber to interleave lease-table
+    # rows with the appropriations note text, so "total interim dividends for the
+    # year 2024" and "at 3.40 per share" end up on non-adjacent extracted lines.
+    # A DOTALL regex on the full page text spans across the interleaved content
+    # and finds the value correctly regardless of line-break positions.
+    for _, text in div_pages:
+        m = _DPS_ANNUAL_TOTAL_RX.search(text)
+        if m:
+            v = _parse(m.group(1))
+            if v and _min <= v <= _max:
+                return v
+
+    # ── Stage 3b: "2024" within ±1 line, div_pages first then all pages ──
+    # div_pages-first prevents a later corporate-governance page from overriding
+    # the financial-note DPS (e.g. a SABIC management-report re-mention of 1.70).
+    result = None
+    for pg_set in (div_pages, pages):
+        for _, text in pg_set:
+            lines = text.splitlines()
+            for idx, line in enumerate(lines):
+                stripped = line.strip()
+                if not stripped or _is_disqualified(stripped):
+                    continue
+                v = _from_line(stripped)
+                if not v:
+                    continue
+                ctx = " ".join(lines[max(0, idx - 1): idx + 2])
+                if _DPS_YEAR_RX.search(ctx):
+                    result = v
+        if result:
+            break
+    if result:
+        return result
+
+    # ── Stage 4: dividend note last match, no year qualifier ────────
+    result = None
+    for _, text in search_pages:
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or _is_disqualified(stripped):
+                continue
+            v = _from_line(stripped)
+            if v:
+                result = v
+    return result
 
 
 # ── Orchestrator ────────────────────────────────────────────────
