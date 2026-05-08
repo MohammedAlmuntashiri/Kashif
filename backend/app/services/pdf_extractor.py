@@ -384,8 +384,6 @@ _DPS_SAR_RX = re.compile(
 )
 # Secondary prose pattern: "at X.XX per share" (SABIC appropriations note style)
 _DPS_AT_RX = re.compile(r"\bat\s+([\d,]+(?:\.\d+)?)\s+per\s+share\b", re.I)
-# Fiscal-year qualifier: "2024" on the same line
-_DPS_YEAR_RX = re.compile(r"\b2024\b")
 # "(SAR per share)" column-header in a SNB-style dated-payment table
 _DPS_COL_HEADER_RX = re.compile(r"\(\s*SAR\s+per\s+share\s*\)", re.I)
 # "SAR per share" as a STANDALONE column header (no surrounding parens) — Aramco quarterly table
@@ -394,8 +392,13 @@ _DPS_ARAMCO_HDR_RX = re.compile(r"^SAR\s+per\s+share\s*$", re.I | re.M)
 _DPS_DECIMAL_RX = re.compile(r"\d+\.\d+")
 # General number extractor (integers + decimals)
 _DPS_NUM_RX = re.compile(r"\d[\d,]*(?:\.\d+)?")
-# "paid on … 2024" — distinguishes actual 2024 payments from comparison-year entries
-_DPS_PAID_2024_RX = re.compile(r"paid\s+on\b[^.]*?\b2024\b", re.I)
+# Fiscal-year detection: "for the year ended … 20XX", "year ended … 20XX", etc.
+_FISCAL_YEAR_DETECT_RX = re.compile(
+    r"(?:for\s+the\s+year\s+ended|year\s+ended|period\s+ended)[^.\n]{0,60}?\b(20\d\d)\b",
+    re.I,
+)
+# Any 4-digit year starting with 20 (fallback for fiscal-year detection)
+_ANY_YEAR_RX = re.compile(r"\b(20\d\d)\b")
 
 DPS_PROSE_DISQUALIFIERS = [
     re.compile(r"\bfair\s+value\b", re.I),
@@ -425,16 +428,8 @@ _DPS_QUARTER_ORDINAL_RX = re.compile(
 )
 # Sentence splitter for Stage 3c (period/! followed by whitespace)
 _DPS_SENT_SPLIT_RX = re.compile(r"(?<=[.!?])\s+")
-# "total interim dividends" — marks an explicit annual-total statement (SABIC)
-# Multi-line DOTALL pattern: "total interim dividends for the year 2024 ... at X per share"
-# Handles SABIC's two-column layout where pdfplumber interleaves lease-table rows
-# with the appropriations note, breaking the sentence across non-adjacent lines.
-_DPS_ANNUAL_TOTAL_RX = re.compile(
-    r"total\s+interim\s+dividends\s+for\s+the\s+year\s+2024\b.{0,1000}?\bat\s+([\d.]+)\s+per\s+share",
-    re.I | re.DOTALL
-)
-# Subsequent-year marker — exclude values from 2025+ post-reporting-period events
-_DPS_FUTURE_YEAR_RX = re.compile(r"\b20(?:25|26|27|28|29)\b")
+# _DPS_ANNUAL_TOTAL_RX and _DPS_FUTURE_YEAR_RX are built dynamically inside
+# extract_dividends_per_share so they reflect the actual reporting year.
 
 
 # ── Shares outstanding: keywords + disqualifiers ────────────────
@@ -2029,7 +2024,30 @@ def extract_shares_outstanding(pages):
                 return n
 
     return None
-def extract_dividends_per_share(pages):
+
+
+def _detect_fiscal_year(pages):
+    """Infer the reporting fiscal year from PDF text.
+
+    Tries "year ended … 20XX" first (present on virtually every Tadawul
+    annual report cover and financial-statement header). Falls back to the
+    most common 20XX year found in the first three pages.
+    Returns an int year, or None if detection fails.
+    """
+    for _, text in pages:
+        m = _FISCAL_YEAR_DETECT_RX.search(text)
+        if m:
+            return int(m.group(1))
+    from collections import Counter
+    years = []
+    for _, text in pages[:3]:
+        years.extend(int(y) for y in _ANY_YEAR_RX.findall(text))
+    if years:
+        return Counter(years).most_common(1)[0][0]
+    return None
+
+
+def extract_dividends_per_share(pages, year=None):
     """Find annual dividends per share (ordinary shares).
 
     Stage 1 — Aramco quarterly-column table "Total" row:
@@ -2038,21 +2056,40 @@ def extract_dividends_per_share(pages):
       footnote digit is not mistaken for a per-share value.
 
     Stage 2 — SNB "(SAR per share)" column-header table:
-      Sums values with a decimal point from rows whose date column says "2024".
+      Sums decimal values from rows whose date column contains the reporting year.
       Requiring a decimal avoids adding day-integers like "31" from date strings.
 
-    Stage 3a — Al Rajhi "paid on 2024" forward-context sum (div_pages only):
+    Stage 3a — Al Rajhi "paid on <year>" forward-context sum (div_pages only):
       For each per-share value in the dividend note, looks forward 5 lines for
-      "paid on … 2024". Sums only such values — correctly includes H2 2023
-      dividend paid in April 2024 alongside H1 2024 dividend paid in August 2024
-      (= 2.40 total) while excluding H1 2023 / H2 2022 payments dated 2023.
+      "paid on … <year>". Sums only such values — correctly includes H2 prior-year
+      dividend paid in the reporting year alongside the H1 reporting-year payment,
+      while excluding payments whose paid-dates fall in earlier years.
 
-    Stage 3b — Prose with "2024" on same line (all pages, last-match):
+    Stage 3b — Prose with reporting year on same line (all pages, last-match):
       Covers Jarir, Zain, Almarai, Bupa, SABIC. Last-match so an explicit
       annual-total statement beats an earlier partial-period mention.
 
     Stage 4 — Dividend note last-match (no year qualifier, fallback).
+
+    year — the 4-digit fiscal year of the report (e.g. 2024). If None,
+      auto-detected from the pages via _detect_fiscal_year().
     """
+    if year is None:
+        year = _detect_fiscal_year(pages)
+
+    yr = str(year) if year else r"20\d\d"
+    _dps_year_rx         = re.compile(rf"\b{yr}\b")
+    _dps_paid_year_rx    = re.compile(rf"paid\s+on\b[^.]*?\b{yr}\b", re.I)
+    _dps_annual_total_rx = re.compile(
+        rf"total\s+interim\s+dividends\s+for\s+the\s+year\s+{yr}\b.{{0,1000}}?\bat\s+([\d.]+)\s+per\s+share",
+        re.I | re.DOTALL,
+    )
+    if year:
+        _future_alts   = "|".join(str(y) for y in range(year + 1, year + 6))
+        _dps_future_rx = re.compile(rf"\b(?:{_future_alts})\b")
+    else:
+        _dps_future_rx = re.compile(r"\b20(?:2[5-9]|3\d)\b")
+
     div_pages = _pages_matching_patterns(pages, DIVIDEND_NOTE_PATTERNS)
     search_pages = div_pages or pages
     _min, _max = 0.01, 100.0
@@ -2100,7 +2137,7 @@ def extract_dividends_per_share(pages):
             continue
         total, found = 0.0, False
         for line in text.splitlines():
-            if not _DPS_YEAR_RX.search(line):
+            if not _dps_year_rx.search(line):
                 continue
             for tok in _DPS_DECIMAL_RX.findall(line):  # decimal values only
                 v = _parse(tok)
@@ -2127,7 +2164,7 @@ def extract_dividends_per_share(pages):
             if not v:
                 continue
             forward = " ".join(lines[idx + 1: idx + 6])
-            if _DPS_PAID_2024_RX.search(forward):
+            if _dps_paid_year_rx.search(forward):
                 total += v
                 found = True
         if found and _min <= total <= 20:
@@ -2164,7 +2201,7 @@ def extract_dividends_per_share(pages):
             for sent in sentences:
                 if sent == target:
                     continue
-                if _is_disqualified(sent) or _DPS_FUTURE_YEAR_RX.search(sent):
+                if _is_disqualified(sent) or _dps_future_rx.search(sent):
                     continue
                 if _DPS_EACH_QUARTER_RX.search(sent):
                     continue
@@ -2182,7 +2219,7 @@ def extract_dividends_per_share(pages):
     # A DOTALL regex on the full page text spans across the interleaved content
     # and finds the value correctly regardless of line-break positions.
     for _, text in div_pages:
-        m = _DPS_ANNUAL_TOTAL_RX.search(text)
+        m = _dps_annual_total_rx.search(text)
         if m:
             v = _parse(m.group(1))
             if v and _min <= v <= _max:
@@ -2203,7 +2240,7 @@ def extract_dividends_per_share(pages):
                 if not v:
                     continue
                 ctx = " ".join(lines[max(0, idx - 1): idx + 2])
-                if _DPS_YEAR_RX.search(ctx):
+                if _dps_year_rx.search(ctx):
                     result = v
         if result:
             break
@@ -2236,7 +2273,7 @@ _PREFER_LARGER_FROM_ROWWISE = {
 }
 
 
-def extract_all(pdf_path):
+def extract_all(pdf_path, year=None):
     """Extract all 10 financial values from one PDF.
 
     Two-pass extraction:
@@ -2255,10 +2292,16 @@ def extract_all(pdf_path):
         column-layout fragment (catches SNB revenue/net_income).
       - In all other cases, prefer the standard pass.
 
+    year — optional 4-digit fiscal year (e.g. 2024). When omitted it is
+      auto-detected from the PDF text and forwarded to
+      extract_dividends_per_share, which contains year-specific logic.
+
     Returns dict with keys matching FinancialData column names. A value of
     None means extraction returned nothing — either the field is not
     implemented yet, or both passes couldn't find a match.
     """
+    standard_pages, rowwise_pages = _extract_text_dual(pdf_path)
+    detected_year = year or _detect_fiscal_year(standard_pages)
     extractors = {
         "revenue":              extract_revenue,
         "net_income":           extract_net_income,
@@ -2269,9 +2312,8 @@ def extract_all(pdf_path):
         "cash_and_equivalents": extract_cash_and_equivalents,
         "free_cash_flow":       extract_free_cash_flow,
         "shares_outstanding":   extract_shares_outstanding,
-        "dividends_per_share":  extract_dividends_per_share,
+        "dividends_per_share":  lambda pages: extract_dividends_per_share(pages, detected_year),
     }
-    standard_pages, rowwise_pages = _extract_text_dual(pdf_path)
     standard = {name: fn(standard_pages) for name, fn in extractors.items()}
     rowwise = {name: fn(rowwise_pages) for name, fn in extractors.items()}
 
