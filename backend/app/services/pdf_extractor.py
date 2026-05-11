@@ -141,6 +141,10 @@ KEYWORDS = {
     ],
     "shares_outstanding": [
         "Shares outstanding", "Number of shares", "Issued shares",
+        # Alinma EPS note (2022, 2024) uses "weighted average number of
+        # OUTSTANDING shares" — extra "outstanding" word breaks the
+        # generic "Weighted average number of shares" substring match.
+        "Weighted average number of outstanding shares",
         "Weighted average number of shares",
         "عدد الأسهم", "الأسهم المصدرة", "المتوسط المرجح لعدد الأسهم",
     ],
@@ -220,6 +224,10 @@ NET_INCOME_TOTAL_KEYWORDS = _expand_arabic([
     # random in-document mention with a small unrelated number on the same line.
     "After zakat and income tax",
     "بعد الزكاة وضريبة الدخل",
+    # Alinma 2022: full-line label is "Net income for the year after zakat".
+    # Listed before generic "Net income" so the longer-specific phrase wins
+    # when both could substring-match the same line.
+    "Net income for the year after zakat",
     "Profit for the year", "Net profit", "Net income", "Net earnings",
     "صافي الدخل", "صافي الربح", "ربح السنة", "ربح العام",
 ])
@@ -493,8 +501,11 @@ SHARES_OUTSTANDING_KEYWORDS = _expand_arabic([
 _SHARES_INLINE_UNIT_RX = re.compile(r"\(\s*in\s+(millions?|thousands?)\s*\)", re.I)
 # Matches narrative share counts like "150 million shares" or "150 million ordinary shares"
 # (Bupa 2024: shares appear only in prose, never in a standalone table row).
+# Comma allowed inside the number to handle Alinma's "2,485.3 million shares"
+# / "1,990.3 million shares" — without it, \d+ stops at the comma and only
+# captures "2" or "1", losing the leading 2,000+ million prefix.
 _SHARES_MILLION_NARRATIVE_RX = re.compile(
-    r"(\d+(?:\.\d+)?)\s+million\s+(?:ordinary\s+)?shares?",
+    r"([\d,]+(?:\.\d+)?)\s+million\s+(?:ordinary\s+)?shares?",
     re.I
 )
 
@@ -567,10 +578,24 @@ BORROWINGS_COMPONENT_KEYWORDS = _expand_arabic([
     # Bank-specific instruments (Al Rajhi, SNB)
     "Debt securities issued and term loans",
     "Sukuk Issued",
+    # Alinma 2022: their main debt line is "Due to SAMA, banks and other
+    # financial institutions". Including "SAMA" makes this Alinma-specific —
+    # Al Rajhi / SNB use plain "Due to banks and other financial institutions"
+    # which is still excluded by the BORROWINGS_DISQUALIFIERS "due to banks"
+    # regex (it doesn't match this SAMA-prefixed variant because of the
+    # interposed "SAMA," between "to" and "banks").
+    "Due to SAMA, banks and other financial institutions",
+    "Due to SAMA",
     # Long-term / non-current variants
     "Long-term borrowings", "Long term borrowings",
     "Long-term loans", "Long term loans",
     "Long-term debt", "Long term debt",
+    # Alkhorayef 2024 (and other industrial issuers) use plain "Term loans"
+    # without "Long-term"/"Short-term" qualifier — position in the BS
+    # (non-current vs current section) tells you which it is. Without this,
+    # the extractor missed both Term-loans rows (166.8M + 532.3M = 699.1M)
+    # and only summed Lease liabilities (524K + 1.07M = 1.6M).
+    "Term loans", "Term loan",
     # Short-term / current variants
     "Short-term borrowings", "Short term borrowings",
     "Short-term loans", "Short term loans",
@@ -667,6 +692,24 @@ CASH_DUE_FROM_BANKS_KEYWORDS = _expand_arabic([
     "مستحق من البنوك",
 ])
 
+# Stage-3 fallback: the Statement of Cash Flows closing balance is the
+# IAS-7 authoritative figure for "Cash and cash equivalents". Used when
+# Stage 2 (bank component split on BS) is incomplete because the issuer's
+# Saudi-Central-Bank label doesn't substring-match the generic CB keyword
+# (Alinma 2024: "Cash and balances with Saudi Central Bank (SAMA)" — extra
+# "Saudi" word, singular "Bank", parenthetical (SAMA) — fails to match
+# "Cash and balances with Central Banks").
+CASH_CF_CLOSING_KEYWORDS = _expand_arabic([
+    "Cash and cash equivalents at end of the year",
+    "Cash and cash equivalents at the end of the year",
+    "Cash and cash equivalents at end of year",
+    "Cash and cash equivalents at end of the period",
+    "Cash and cash equivalents at the end of the period",
+    "Cash and cash equivalents at end of period",
+    "النقد وما يماثله في نهاية السنة",
+    "النقد وما يماثله في نهاية الفترة",
+])
+
 
 # ── Free cash flow: OCF subtotal + capex keywords ───────────────
 # FCF = Net cash from operating activities − Capital expenditure.
@@ -687,6 +730,14 @@ OCF_KEYWORDS = _expand_arabic([
     "Net cash used in operating activities",
     "Net cash from/(used in) operating activities",
     "Net cash (used in)/from operating activities",
+    # SRMG 2024 uses "Net cash flows from / (used in) operating activities"
+    # — an extra "flows" word between "cash" and "from". Without these
+    # variants the OCF lookup fails entirely and FCF returns null.
+    "Net cash flows from operating activities",
+    "Net cash flows from/(used in) operating activities",
+    "Net cash flows from / (used in) operating activities",
+    "Net cash flows generated from operating activities",
+    "Net cash flows used in operating activities",
     # SNB and some other banks use "generated from/(used in)" combining both
     # variants — must be listed explicitly because substring matching requires
     # an exact hit and neither "generated from" nor "from/(used in)" alone
@@ -732,6 +783,12 @@ CAPEX_KEYWORDS = _expand_arabic([
     "Additions to property, plant and equipment",
     "Addition to property, plant and equipment",
     "Payments for property, plant and equipment",
+    # Mobily 2024 uses singular "Payment of property and equipment" without
+    # "plant and" — different from Aramco's "Payments for property, plant
+    # and equipment". Without this, FCF computes as just OCF (capex sum
+    # was 0) — Mobily reported 6.34B FCF instead of the correct 3.75B.
+    "Payment of property and equipment",
+    "Payments of property and equipment",
     "Investment in property, plant and equipment",
     "Investments in property, plant and equipment",
     # "property and equipment" WITHOUT "plant and" — used by Habib, Jarir,
@@ -846,8 +903,10 @@ UNIT_PATTERNS = [
     (re.compile(r"(?:SAR|SR)[\s'’‘′ʼ`]*0{6}\b", re.I), 1_000_000),
     (re.compile(r"(?:SAR|SR)[\s'’‘′ʼ`]*[Mm]n?\b", re.I), 1_000_000),
     # "in millions/thousands of Saudi Riyals|SAR|SR"
-    (re.compile(r"\bin\s+millions?\s+of\s+(?:Saudi\s+Riyals?|SAR|SR)\b", re.I), 1_000_000),
-    (re.compile(r"\bin\s+thousands?\s+of\s+(?:Saudi\s+Riyals?|SAR|SR)\b", re.I), 1_000),
+    # "of" made optional to also catch SEC 5110's phrasing
+    # "(All amounts in thousands Saudi Riyals unless otherwise stated)" — no "of".
+    (re.compile(r"\bin\s+millions?\s+(?:of\s+)?(?:Saudi\s+Riyals?|SAR|SR)\b", re.I), 1_000_000),
+    (re.compile(r"\bin\s+thousands?\s+(?:of\s+)?(?:Saudi\s+Riyals?|SAR|SR)\b", re.I), 1_000),
     # "Saudi Riyals millions/thousands" (STC's reversed phrasing)
     (re.compile(r"\b(?:Saudi\s+Riyals?|SAR|SR)\s+millions?\b", re.I), 1_000_000),
     (re.compile(r"\b(?:Saudi\s+Riyals?|SAR|SR)\s+thousands?\b", re.I), 1_000),
@@ -907,6 +966,22 @@ def _first_plausible_number(s, *, min_abs=100, max_abs=float("inf"),
     layout.
     """
     s = re.sub(r"(\d)\s+\.(\d)", r"\1.\2", s)
+    # Collapse stray whitespace inside comma-formatted numbers. pdfplumber
+    # occasionally outputs "1, 990.3" (space after comma) or "1 ,990.3"
+    # (space before comma) when extracting prose share-counts like
+    # "1,990.3 million shares". Without this, NUMBER_RE splits the value
+    # into "1," + "990.3" and the kerning-heal block misses it because
+    # the second token contains a decimal — so the leading digit is lost
+    # (Alinma 2022 shares: 1,990.3M → 990.3M; Alinma 2024: 2,485.3M →
+    # 485.3M).
+    # The (\d{3})(?!\d) lookahead restricts merging to *proper thousand
+    # groups* (exactly 3 digits, not followed by another digit). Without
+    # it, dates like "May 30, 2023" collapse to "30,2023" and parse as
+    # 302023, hijacking shares-extraction in prose notes
+    # (Jarir page 50: "split into ten" + "held on May 30, 2023" →
+    # 302,023 instead of 1,200,000,000).
+    s = re.sub(r"(\d),\s+(\d{3})(?!\d)", r"\1,\2", s)
+    s = re.sub(r"(\d)\s+,(\d{3})(?!\d)", r"\1,\2", s)
     matches = []
     for m in NUMBER_RE.finditer(s):
         tok = m.group(0)
@@ -1051,6 +1126,19 @@ BALANCE_SHEET_PATTERNS = [re.compile(p, re.I) for p in _BS_HEADER_PATTERN_STRING
 # add 4-8 extra rows of borrowings and inflate the total ~3x.
 TOTAL_ASSETS_RX = re.compile(r"total\s+assets|إجمالي\s+الأصول|إجمالي\s+الموجودات",
                              re.I)
+
+# Auditor's-report pages mention "statement of financial position" and
+# "total assets" in narrative prose (key audit matter on property valuation,
+# audit opinion paragraphs). They match BALANCE_SHEET_PATTERNS + TOTAL_ASSETS_RX
+# but are NOT the real BS — they sit several pages before it. Without this
+# disqualifier, the contiguous-block selection below treats the auditor page
+# as the start of the BS cluster and stops before reaching the real BS,
+# breaking cash / borrowings extraction (Al Akaria 4020 page 4 audit report
+# vs page 7 real BS, gap of 3).
+AUDITOR_PAGE_RX = re.compile(
+    r"INDEPENDENT\s+AUDITORS?'?\s+REPORT|KEY\s+AUDIT\s+MATTER",
+    re.I,
+)
 
 
 def _pages_matching_patterns(pages, patterns):
@@ -1565,15 +1653,17 @@ def extract_eps(pages):
         "in millions of SR" hint must NOT scale it.
       - min_abs=0.01 — EPS values are typically 0.10–20 SAR/share, well
         below the default currency threshold.
-      - max_abs=10_000 — filters multi-million income totals when an EPS
+      - max_abs=500 — filters multi-million income totals when an EPS
         keyword (e.g. SABIC's "• Net income (loss)") also matches the
-        consolidated income line.
+        consolidated income line. Tightened from 10,000 → 500 because no
+        real Saudi EPS exceeds 100 SAR; this rejects garbage matches like
+        Alinma 2022 returning 1987.7 from a misread cell.
       - EPS_DISQUALIFIERS skips "continuing operations" / "before zakat"
         rows so total-EPS wins over continuing-ops EPS.
     """
     income_pages = _pages_matching_patterns(pages, INCOME_STATEMENT_PATTERNS)
     eps_kwargs = dict(skip_unit=True, last=True, exclude=EPS_DISQUALIFIERS,
-                      min_abs=0.01, max_abs=10_000, require_decimal=True,
+                      min_abs=0.01, max_abs=500, require_decimal=True,
                       keyword_priority_over_page=True)
     for subset in (income_pages, pages):
         for anchor_start in (True, False):
@@ -1710,8 +1800,11 @@ def extract_total_borrowings(pages):
     # Tighten to pages that actually carry the BS bottom-line. Notes
     # pages (STC note 27, SNB liquidity notes, Bupa note 17) match the
     # BS header pattern but contain maturity-table rows that would
-    # double-count borrowings under summation.
-    real_bs = [(pn, t) for pn, t in bs_pages if TOTAL_ASSETS_RX.search(t)]
+    # double-count borrowings under summation. Also exclude auditor's
+    # report pages (Al Akaria 4020 p4) whose narrative prose matches both
+    # BS_HEADER and TOTAL_ASSETS_RX.
+    real_bs = [(pn, t) for pn, t in bs_pages
+               if TOTAL_ASSETS_RX.search(t) and not AUDITOR_PAGE_RX.search(t)]
     # Restrict to the contiguous block of real BS pages at the start.
     # The BS proper typically spans 1-2 consecutive pages (assets page
     # + liabilities/equity page for Almarai); notes pages with "Total
@@ -1774,7 +1867,8 @@ def extract_cash_and_equivalents(pages):
     CASH_DISQUALIFIERS to exclude the liability-side "Due to banks" line.
     """
     bs_pages = _pages_matching_patterns(pages, BALANCE_SHEET_PATTERNS)
-    real_bs = [(pn, t) for pn, t in bs_pages if TOTAL_ASSETS_RX.search(t)]
+    real_bs = [(pn, t) for pn, t in bs_pages
+               if TOTAL_ASSETS_RX.search(t) and not AUDITOR_PAGE_RX.search(t)]
     contiguous = []
     prev_pn = None
     for pn, t in real_bs:
@@ -1795,12 +1889,33 @@ def extract_cash_and_equivalents(pages):
     if n is not None:
         return n
 
-    # Stage 2: bank component sum (Cash with CB + Due from banks)
-    return _sum_components_in_pages(
-        subset,
-        CASH_BANK_KEYWORDS + CASH_DUE_FROM_BANKS_KEYWORDS,
-        exclude=CASH_DISQUALIFIERS,
+    # Stage 2: bank component sum (Cash with CB + Due from banks).
+    # Compute the two components separately so Stage 3 can detect when
+    # CB cash didn't match (Alinma) and fall back to the CF statement.
+    cb_cash = _sum_components_in_pages(
+        subset, CASH_BANK_KEYWORDS, exclude=CASH_DISQUALIFIERS,
     )
+    due_from_banks = _sum_components_in_pages(
+        subset, CASH_DUE_FROM_BANKS_KEYWORDS, exclude=CASH_DISQUALIFIERS,
+    )
+    if cb_cash is not None and due_from_banks is not None:
+        return cb_cash + due_from_banks
+
+    # Stage 3: CF-statement closing-balance fallback. Fires when the
+    # Stage 2 BS split is incomplete (CB cash didn't match — Alinma's
+    # "...Saudi Central Bank (SAMA)" label vs the generic CB keyword)
+    # OR when both BS components are missing entirely. The CF statement
+    # closing balance is the IAS-7 authoritative figure for cash and cash
+    # equivalents and lives on the Statement of Cash Flows.
+    cf_pages = _pages_matching_patterns(pages, CASH_FLOW_STATEMENT_PATTERNS)
+    cf_cash = _extract_in_pages(cf_pages, CASH_CF_CLOSING_KEYWORDS, last=True)
+    if cf_cash is not None:
+        return cf_cash
+
+    # Final: whatever Stage 2 found (Due-from-banks-only is better than nothing).
+    if cb_cash is not None or due_from_banks is not None:
+        return (cb_cash or 0) + (due_from_banks or 0)
+    return None
 def extract_free_cash_flow(pages):
     """Compute free cash flow = OCF − capital expenditure.
 
@@ -1968,7 +2083,7 @@ def extract_shares_outstanding(pages):
                     # number is already scaled to actual share count; skip normal extraction.
                     narrative_m = _SHARES_MILLION_NARRATIVE_RX.search(after)
                     if narrative_m:
-                        n_narrative = float(narrative_m.group(1)) * 1_000_000
+                        n_narrative = float(narrative_m.group(1).replace(",", "")) * 1_000_000
                         if _MIN_SHARES <= n_narrative <= _MAX_SHARES:
                             return n_narrative
 
@@ -2346,4 +2461,5 @@ def extract_all(pdf_path, year=None):
         if 0.7 <= abs(_s_scaled * _e) / abs(_n) <= 1.5:
             result["shares_outstanding"] = _s_scaled
 
+    result["_fiscal_year"] = detected_year
     return result
