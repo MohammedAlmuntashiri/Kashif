@@ -603,7 +603,22 @@ BORROWINGS_COMPONENT_KEYWORDS = _expand_arabic([
     "Current portion of borrowings",
     "Current portion of debt",
     "Current portion of long-term loans",
+    "Current portion of long term loans",
     "Current portion of long-term debt",
+    # SEC 5110 uses both "Sukuk" and "long-term loans" without hyphen.
+    # Existing "Sukuk Issued" catches the bank phrasing; SEC's BS lists
+    # "Long term sukuk" + "Current portion of sukuk" as separate rows.
+    "Long term sukuk", "Long-term sukuk",
+    "Current portion of sukuk",
+    "Current portion of long term sukuk",
+    "Current portion of long-term sukuk",
+    # Al Akaria 2024 BS lists Ministry-of-Finance loans (current + non-
+    # current) and a singular "Short-term bank loan" — none caught by the
+    # existing plural / generic patterns above.
+    "Loan from Ministry of Finance",
+    "Loans from Ministry of Finance",
+    "Short-term bank loan",
+    "Short term bank loan",
     # Combined / generic — Aramco prints just "Borrowings" twice (NC
     # then C, distinguished by section, not label); Almarai uses
     # "Loans and Borrowings"; Jarir uses "Bank borrowings".
@@ -748,6 +763,15 @@ OCF_KEYWORDS = _expand_arabic([
     "Net cash inflow from operating activities",
     "Net cash inflows from operating activities",
     "Cash generated from operations",
+    # Al Akaria 2024 prints the OCF subtotal as "Cash flows generated from /
+    # (used in) operating activities" — no "Net" prefix. Adding the prefix-
+    # free variants (kept narrower than bare "Cash flows from operating
+    # activities" which would also match CF section headers).
+    "Cash flows generated from / (used in) operating activities",
+    "Cash flows generated from/(used in) operating activities",
+    "Cash flows generated from operating activities",
+    "Cash flows from / (used in) operating activities",
+    "Cash flows from/(used in) operating activities",
     # Arabic
     "صافي التدفق النقدي من الأنشطة التشغيلية",
     "صافي النقد المتولد من الأنشطة التشغيلية",
@@ -1586,6 +1610,14 @@ def _extract_text_dual(pdf_path):
 
 # ── Per-value extractors (stubs until each part lands) ──────────
 
+_RESTATEMENT_PAGE_RX = re.compile(
+    r"reclassif(?:ication|ied|y)|"
+    r"restate(?:ment|d|ments)|"
+    r"prior\s+period\s+adjustment",
+    re.I,
+)
+
+
 def extract_revenue(pages):
     """Find revenue (or, for banks, total operating income).
 
@@ -1594,11 +1626,21 @@ def extract_revenue(pages):
       2. If nothing found there, fall back to scanning the whole document
          (catches highlights/summary tables when income-statement parsing
          fails — e.g. multi-line headers, RTL Arabic table quirks).
+         The fallback skips pages that look like reclassification /
+         restatement notes (e.g. Alkhorayef Note 36 "Reclassifications
+         in Prior Periods" which contains the previously-reported 2023
+         revenue figure and would otherwise win the substring match).
     """
     keywords = KEYWORDS["revenue"]
     income_pages = _pages_matching_patterns(pages, INCOME_STATEMENT_PATTERNS)
-    return (_extract_in_pages(income_pages, keywords)
-            or _extract_in_pages(pages, keywords))
+    primary = _extract_in_pages(income_pages, keywords)
+    if primary is not None:
+        return primary
+    fallback_pages = [
+        (pn, text) for pn, text in pages
+        if not _RESTATEMENT_PAGE_RX.search(text)
+    ]
+    return _extract_in_pages(fallback_pages, keywords)
 def extract_net_income(pages):
     """Find net income, preferring parent-attributable when reported.
 
