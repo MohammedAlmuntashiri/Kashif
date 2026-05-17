@@ -13,7 +13,12 @@ instance/
 
 # Environment
 .env
+.env.local
+.env.*.local
 .flaskenv
+
+# Claude Code local config (per-machine permissions, scheduling, etc.)
+.claude/
 
 # Node
 node_modules/
