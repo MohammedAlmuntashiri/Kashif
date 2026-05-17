@@ -1,6 +1,7 @@
-// Colored pill showing valuation status.
+// Colored pill showing valuation status, with a matching trend icon.
 
 import React from 'react';
+import { TrendingUp, Minus, TrendingDown, HelpCircle } from 'lucide-react';
 import { useLang } from '../../i18n/LanguageContext.jsx';
 
 const STYLES = {
@@ -16,6 +17,12 @@ const FALLBACK =
   'bg-slate-100 text-slate-600 ring-slate-300 ' +
   'dark:bg-slate-800 dark:text-slate-400 dark:ring-slate-700';
 
+const ICONS = {
+  undervalued: TrendingUp,
+  fair:        Minus,
+  overvalued:  TrendingDown,
+};
+
 // Map backend status string → translation key.
 const LABEL_KEYS = {
   undervalued: 'badge.undervalued',
@@ -27,13 +34,15 @@ export default function ValuationBadge({ status }) {
   const { t } = useLang();
   const className = STYLES[status] || FALLBACK;
   const label     = LABEL_KEYS[status] ? t(LABEL_KEYS[status]) : t('badge.unknown');
+  const Icon      = ICONS[status] || HelpCircle;
 
   return (
     <span
       className={
-        `inline-block px-3 py-1 rounded-full text-xs font-bold tracking-wide ring-1 ring-inset ${className}`
+        `inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-bold tracking-wide ring-1 ring-inset ${className}`
       }
     >
+      <Icon size={12} strokeWidth={2.5} />
       {label}
     </span>
   );

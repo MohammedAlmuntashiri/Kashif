@@ -44,13 +44,13 @@ export default function SectorPage() {
     <div className="max-w-7xl mx-auto px-6 py-8">
 
       <nav className="text-sm text-slate-500 dark:text-slate-400 mb-3">
-        <Link to="/" className="hover:text-blue-600 dark:hover:text-blue-400">{t('common.home')}</Link>
+        <Link to="/" className="hover:text-brand-600 dark:hover:text-brand-400">{t('common.home')}</Link>
         <span className="mx-2">/</span>
         <span className="text-slate-900 dark:text-slate-100 font-medium">{t('sec.breadcrumb')}: {sectorLabel}</span>
       </nav>
 
       <div className="mb-6">
-        <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
+        <h1 className="font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
           {sectorLabel}
         </h1>
         <div className="text-sm text-slate-500 dark:text-slate-400 mt-1">

@@ -77,7 +77,7 @@ export default function ComparisonTable({ rows }) {
                 >
                   {col.labelKey ? t(col.labelKey) : col.label}
                   {sortBy.key === col.key && (
-                    <span className="ms-1 text-blue-600 dark:text-blue-400">
+                    <span className="ms-1 text-brand-600 dark:text-brand-400">
                       {sortBy.direction === 'asc' ? '▲' : '▼'}
                     </span>
                   )}
@@ -87,7 +87,7 @@ export default function ComparisonTable({ rows }) {
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
             {sortedRows.map((row) => (
-              <tr key={row.symbol} className="hover:bg-blue-50/50 dark:hover:bg-blue-950/30 text-slate-900 dark:text-slate-100">
+              <tr key={row.symbol} className="hover:bg-brand-50/50 dark:hover:bg-brand-950/30 text-slate-900 dark:text-slate-100">
                 {COLUMNS.map((col) => {
                   const value = row[col.key];
                   // Sectors get translated; everything else uses the column formatter.

@@ -20,6 +20,12 @@
 
 import axios from 'axios';
 import * as mocks from '../mocks/data.js';
+import { news as mockNews } from '../mocks/news.js';
+import {
+  hasFinnhubKey,
+  fetchCompanyNews,
+  fetchMarketNews,
+} from './finnhub.js';
 
 // ⚠️  Flip this to false when the real DB is populated.  ⚠️
 const USE_MOCKS = true;
@@ -106,6 +112,49 @@ export const uploadPdf = (ticker, file, { dryRun = false } = {}) => {
     params,
     headers: { 'Content-Type': 'multipart/form-data' },
   }).then((r) => r.data);
+};
+
+// ─── News ─────────────────────────────────────────────────────────────
+// Real news comes from Finnhub (called directly from the browser, no
+// backend involvement) when REACT_APP_FINNHUB_KEY is set. Without a key
+// we fall back to the bundled mock headlines so the page still renders.
+//
+// See services/finnhub.js for the client + normalizer. Provider response
+// is mapped to the same shape as mocks/news.js so the UI is agnostic.
+const sortByPublished = (a, b) => new Date(b.publishedAt) - new Date(a.publishedAt);
+
+export const getNews = async ({ ticker, limit } = {}) => {
+  // Try Finnhub first when a key is configured. Any failure (rate limit,
+  // bad key, network) silently degrades to the mock feed.
+  if (hasFinnhubKey()) {
+    try {
+      const rows = ticker
+        ? await fetchCompanyNews(ticker)
+        : await fetchMarketNews();
+      rows.sort(sortByPublished);
+      const out = limit ? rows.slice(0, limit) : rows;
+
+      // Success log — confirms the live source is working and lets you
+      // sanity-check the first headline in DevTools.
+      const scope = ticker ? `ticker=${ticker}` : 'market';
+      console.log(
+        `[news] Finnhub OK (${scope}): ${out.length} headline(s)` +
+          (out[0] ? ` — first: "${out[0].title}"` : '')
+      );
+      return out;
+    } catch (err) {
+      // Don't blow up the page — log and fall through to mocks.
+      // err.message is shaped "Finnhub <status>: <body>" by finnhub.js,
+      // which produces the required final log format:
+      //   [news] Finnhub failed, falling back to mocks: Finnhub 401: ...
+      console.warn(`[news] Finnhub failed, falling back to mocks: ${err.message}`);
+    }
+  }
+
+  let rows = mockNews.slice();
+  if (ticker) rows = rows.filter((n) => (n.tickers || []).includes(ticker));
+  rows.sort(sortByPublished);
+  return limit ? rows.slice(0, limit) : rows;
 };
 
 export default api;

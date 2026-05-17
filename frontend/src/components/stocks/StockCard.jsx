@@ -9,6 +9,7 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { formatSAR, formatSARPerShare } from '../../utils/format.js';
 import { useLang } from '../../i18n/LanguageContext.jsx';
+import StockLogo from './StockLogo.jsx';
 
 export default function StockCard({ stock }) {
   const { t, tSector, lang } = useLang();
@@ -31,12 +32,15 @@ export default function StockCard({ stock }) {
   return (
     <Link
       to={`/stock/${symbol}`}
-      className="block bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 hover:shadow-lg dark:hover:shadow-blue-500/10 hover:border-blue-400 dark:hover:border-blue-500 hover:-translate-y-0.5 transition-all"
+      className="block bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 hover:shadow-lg dark:hover:shadow-brand-500/10 hover:border-brand-400 dark:hover:border-brand-500 hover:-translate-y-0.5 transition-all"
     >
-      {/* Header row: ticker + sector pill */}
+      {/* Header row: logo + ticker + sector pill */}
       <div className="flex items-start justify-between gap-2 mb-3">
-        <div className="text-2xl font-bold text-blue-600 dark:text-blue-400 tracking-tight tabular-nums" dir="ltr">
-          {symbol}
+        <div className="flex items-center gap-2.5 min-w-0">
+          <StockLogo symbol={symbol} name={name_en} size="md" />
+          <div className="text-2xl font-bold text-blue-600 dark:text-blue-400 tracking-tight tabular-nums" dir="ltr">
+            {symbol}
+          </div>
         </div>
         <span className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2.5 py-1 rounded-full whitespace-nowrap font-medium">
           {tSector(sector)}

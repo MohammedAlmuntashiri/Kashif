@@ -46,7 +46,7 @@ export default function ComparePage() {
     <div className="max-w-7xl mx-auto px-6 py-8">
 
       <div className="mb-6">
-        <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
+        <h1 className="font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-slate-100 tracking-tight">
           {t('cmp.title')}
         </h1>
         <div className="text-sm text-slate-500 dark:text-slate-400 mt-1">
@@ -81,8 +81,8 @@ export default function ComparePage() {
 function FilterChip({ label, active, onClick }) {
   const base   = 'text-xs px-3 py-1.5 rounded-full transition font-medium';
   const styles = active
-    ? 'bg-blue-600 text-white'
-    : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-blue-400 dark:hover:border-blue-500 hover:text-blue-700 dark:hover:text-blue-300 text-slate-700 dark:text-slate-300';
+    ? 'bg-brand-600 text-white shadow-md shadow-brand-600/30'
+    : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-brand-400 dark:hover:border-brand-500 hover:text-brand-700 dark:hover:text-brand-300 text-slate-700 dark:text-slate-300';
   return (
     <button onClick={onClick} className={`${base} ${styles}`}>
       {label}

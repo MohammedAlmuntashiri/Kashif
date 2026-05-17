@@ -8,6 +8,7 @@
 //       2. writes the choice to localStorage so it persists across reloads
 
 import React, { useEffect, useState } from 'react';
+import { Sun, Moon } from 'lucide-react';
 import { useLang } from '../../i18n/LanguageContext.jsx';
 
 export default function ThemeToggle() {
@@ -35,10 +36,12 @@ export default function ThemeToggle() {
       onClick={() => setDark((d) => !d)}
       title={tooltip}
       aria-label={tooltip}
-      className="text-lg w-9 h-9 flex items-center justify-center rounded-lg hover:bg-slate-700/60 transition"
+      className="w-9 h-9 flex items-center justify-center rounded-lg text-slate-300 hover:text-white hover:bg-slate-700/60 transition"
     >
       {/* Show the icon for the *target* mode — universal convention. */}
-      {dark ? '☀️' : '🌙'}
+      {dark
+        ? <Sun  size={18} strokeWidth={2} />
+        : <Moon size={18} strokeWidth={2} />}
     </button>
   );
 }

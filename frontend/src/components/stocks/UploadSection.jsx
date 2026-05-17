@@ -81,7 +81,7 @@ export default function UploadSection({ ticker }) {
         <button
           type="submit"
           disabled={!file || busy}
-          className="px-4 py-1.5 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-500 disabled:bg-slate-300 dark:disabled:bg-slate-700 dark:disabled:text-slate-500 disabled:cursor-not-allowed transition"
+          className="px-4 py-1.5 bg-brand-600 text-white rounded-lg text-sm font-medium hover:bg-brand-500 disabled:bg-slate-300 dark:disabled:bg-slate-700 dark:disabled:text-slate-500 disabled:cursor-not-allowed transition"
         >
           {busy ? t('up.extracting') : t('up.extract')}
         </button>
@@ -100,7 +100,7 @@ export default function UploadSection({ ticker }) {
             <span className="mx-2 text-slate-400">•</span>
             {t('up.period')}: <code className="bg-slate-100 dark:bg-slate-800 px-1.5 py-0.5 rounded text-xs" dir="ltr">{result.period}</code>
             {result.is_new_row && (
-              <span className="ms-2 text-xs text-blue-700 dark:text-blue-300 bg-blue-50 dark:bg-blue-950/40 px-2 py-0.5 rounded-full">
+              <span className="ms-2 text-xs text-brand-700 dark:text-brand-300 bg-brand-50 dark:bg-brand-950/40 px-2 py-0.5 rounded-full">
                 {t('up.noDbRow')}
               </span>
             )}

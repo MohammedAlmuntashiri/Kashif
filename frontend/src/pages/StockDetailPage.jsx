@@ -9,6 +9,8 @@ import ValuationBadge from '../components/common/ValuationBadge.jsx';
 import ValuationGauge from '../components/stocks/ValuationGauge.jsx';
 import FinancialTable from '../components/stocks/FinancialTable.jsx';
 import UploadSection from '../components/stocks/UploadSection.jsx';
+import NewsList from '../components/news/NewsList.jsx';
+import StockLogo from '../components/stocks/StockLogo.jsx';
 import { formatSARPerShare } from '../utils/format.js';
 import { useLang } from '../i18n/LanguageContext.jsx';
 
@@ -58,7 +60,7 @@ export default function StockDetailPage() {
 
       {/* Breadcrumb */}
       <nav className="text-sm text-slate-500 dark:text-slate-400">
-        <Link to="/" className="hover:text-blue-600 dark:hover:text-blue-400">{t('common.home')}</Link>
+        <Link to="/" className="hover:text-brand-600 dark:hover:text-brand-400">{t('common.home')}</Link>
         <span className="mx-2">/</span>
         <span className="text-slate-900 dark:text-slate-100 font-medium" dir="ltr">{symbol}</span>
       </nav>
@@ -66,17 +68,20 @@ export default function StockDetailPage() {
       {/* Header card */}
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm">
         <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
-            <div className="flex items-center gap-3 flex-wrap">
-              <h1 className="text-3xl font-bold text-slate-900 dark:text-slate-100 tracking-tight tabular-nums" dir="ltr">
-                {symbol}
-              </h1>
-              <span className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2.5 py-1 rounded-full font-medium">
-                {tSector(sector)}
-              </span>
+          <div className="flex items-start gap-4 min-w-0">
+            <StockLogo symbol={symbol} name={name_en} size="lg" />
+            <div className="min-w-0">
+              <div className="flex items-center gap-3 flex-wrap">
+                <h1 className="font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-slate-100 tracking-tight tabular-nums" dir="ltr">
+                  {symbol}
+                </h1>
+                <span className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2.5 py-1 rounded-full font-medium">
+                  {tSector(sector)}
+                </span>
+              </div>
+              <div className="text-xl font-semibold text-slate-800 dark:text-slate-200 mt-2">{primaryName}</div>
+              <div className="text-lg text-slate-500 dark:text-slate-400" dir={secondaryDir}>{secondaryName}</div>
             </div>
-            <div className="text-xl font-semibold text-slate-800 dark:text-slate-200 mt-2">{primaryName}</div>
-            <div className="text-lg text-slate-500 dark:text-slate-400" dir={secondaryDir}>{secondaryName}</div>
           </div>
 
           {market_price != null && (
@@ -158,6 +163,11 @@ export default function StockDetailPage() {
 
       {/* PDF upload section (preview only — never writes DB) */}
       <UploadSection ticker={symbol} />
+
+      {/* Stock-specific news */}
+      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm">
+        <NewsList ticker={symbol} title={t('news.stockTitle', { ticker: symbol })} />
+      </section>
 
     </div>
   );

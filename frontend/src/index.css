@@ -10,19 +10,18 @@ html, body, #root {
 
 body {
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  background-color: #f8fafc;  /* slate-50 — light-mode default */
-  color: #0f172a;             /* slate-900 */
+  /* Light mode: soft gradient from slate-50 to a hint of emerald — keeps
+     the page from looking flat. */
+  background: radial-gradient(ellipse at top, #ecfdf5 0%, #f8fafc 35%) fixed;
+  color: #0f172a;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-
-  /* Smooth fade when toggling between modes. */
   transition: background-color 0.15s ease, color 0.15s ease;
 }
 
-/* Dark-mode body override.
-   Triggered by the `dark` class on <html> (set by ThemeToggle and the
-   bootstrap script in public/index.html). */
+/* Dark-mode body override. Subtle emerald-tinted radial keeps depth without
+   feeling neon. Triggered by the `dark` class on <html>. */
 .dark body {
-  background-color: #020617;  /* slate-950 */
-  color: #f1f5f9;             /* slate-100 */
+  background: radial-gradient(ellipse at top, rgba(6, 78, 59, 0.35) 0%, #020617 40%) fixed;
+  color: #f1f5f9;
 }

@@ -1,10 +1,9 @@
 // Language toggle button for the Navbar — switches between English and Arabic.
-// Shows the *target* language's native name so the user knows what
-// clicking will do:
-//   - In English mode → button reads "العربية" (click to go to Arabic)
-//   - In Arabic mode → button reads "English"   (click to go to English)
+// Shows the *target* language's native name so the user knows what clicking
+// will do (English mode → "العربية", Arabic mode → "English").
 
 import React from 'react';
+import { Languages } from 'lucide-react';
 import { useLang } from '../../i18n/LanguageContext.jsx';
 
 export default function LanguageToggle() {
@@ -18,8 +17,9 @@ export default function LanguageToggle() {
       onClick={() => setLang(targetLang)}
       title={tooltip}
       aria-label={tooltip}
-      className="text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-slate-700/60 transition text-slate-200"
+      className="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-slate-700/60 transition text-slate-200"
     >
+      <Languages size={16} strokeWidth={2} />
       {buttonLabel}
     </button>
   );
