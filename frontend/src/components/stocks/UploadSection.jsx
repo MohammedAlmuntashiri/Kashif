@@ -1,6 +1,7 @@
 // Inline PDF-upload form for the StockDetailPage — PREVIEW ONLY.
 
 import React, { useState } from 'react';
+import { toast } from 'sonner';
 import { uploadPdf } from '../../services/api.js';
 import {
   formatSAR,
@@ -44,8 +45,11 @@ export default function UploadSection({ ticker }) {
     try {
       const r = await uploadPdf(ticker, file, { dryRun: true });
       setResult(r);
+      toast.success(t('up.toast.success', { period: r?.period || '—' }));
     } catch (e) {
-      setError(e.response?.data?.error || e.message || t('up.failed'));
+      const msg = e.response?.data?.error || e.message || t('up.failed');
+      setError(msg);
+      toast.error(msg);
     } finally {
       setBusy(false);
     }

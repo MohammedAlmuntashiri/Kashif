@@ -7,9 +7,13 @@
 
 import React from 'react';
 import { Link } from 'react-router-dom';
+import { motion } from 'framer-motion';
 import { formatSAR, formatSARPerShare } from '../../utils/format.js';
 import { useLang } from '../../i18n/LanguageContext.jsx';
 import StockLogo from './StockLogo.jsx';
+import Sparkline, { deltaForTicker } from './Sparkline.jsx';
+
+const MotionLink = motion(Link);
 
 export default function StockCard({ stock }) {
   const { t, tSector, lang } = useLang();
@@ -30,9 +34,14 @@ export default function StockCard({ stock }) {
   const secondaryDir   = lang === 'ar' ? 'ltr' : 'rtl';
 
   return (
-    <Link
+    <MotionLink
       to={`/stock/${symbol}`}
-      className="block bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 hover:shadow-lg dark:hover:shadow-brand-500/10 hover:border-brand-400 dark:hover:border-brand-500 hover:-translate-y-0.5 transition-all"
+      initial={{ opacity: 0, y: 12 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true, margin: '0px 0px -10% 0px' }}
+      transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
+      whileHover={{ y: -4 }}
+      className="block bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 hover:shadow-lg dark:hover:shadow-brand-500/10 hover:border-brand-400 dark:hover:border-brand-500 transition-[box-shadow,border-color]"
     >
       {/* Header row: logo + ticker + sector pill */}
       <div className="flex items-start justify-between gap-2 mb-3">
@@ -42,7 +51,10 @@ export default function StockCard({ stock }) {
             {symbol}
           </div>
         </div>
-        <span className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2.5 py-1 rounded-full whitespace-nowrap font-medium">
+        <span
+          className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2.5 py-1 rounded-full font-medium max-w-[7.5rem] truncate shrink-0"
+          title={tSector(sector)}
+        >
           {tSector(sector)}
         </span>
       </div>
@@ -55,15 +67,32 @@ export default function StockCard({ stock }) {
         {secondaryName}
       </div>
 
-      {/* Headline price */}
-      <div className="mb-3">
-        <div className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide font-medium">
-          {t('stock.marketPrice')}
-        </div>
-        <div className="text-2xl font-bold text-slate-900 dark:text-slate-100 tabular-nums" dir="ltr">
-          {formatSARPerShare(market_price)}
-        </div>
-      </div>
+      {/* Headline price + 30-day sparkline (deterministic mock until we
+          have a real OHLC endpoint — see Sparkline.jsx). */}
+      {(() => {
+        const d = deltaForTicker(symbol, market_price || 100);
+        const deltaColor = d.up
+          ? 'text-emerald-600 dark:text-emerald-400'
+          : 'text-rose-600 dark:text-rose-400';
+        return (
+          <div className="mb-3">
+            <div className="flex items-end justify-between gap-3 mb-2">
+              <div>
+                <div className="text-xs text-slate-500 dark:text-slate-400 uppercase tracking-wide font-medium">
+                  {t('stock.marketPrice')}
+                </div>
+                <div className="text-2xl font-bold text-slate-900 dark:text-slate-100 tabular-nums" dir="ltr">
+                  {formatSARPerShare(market_price)}
+                </div>
+              </div>
+              <div className={`text-xs font-bold tabular-nums ${deltaColor}`} dir="ltr">
+                {d.up ? '▲' : '▼'} {Math.abs(d.pct).toFixed(2)}%
+              </div>
+            </div>
+            <Sparkline ticker={symbol} anchor={market_price || 100} />
+          </div>
+        );
+      })()}
 
       {/* Snapshot row */}
       <div className="grid grid-cols-3 gap-2 text-xs pt-3 border-t border-slate-100 dark:border-slate-800">
@@ -80,6 +109,6 @@ export default function StockCard({ stock }) {
           <div className="font-semibold text-slate-700 dark:text-slate-200 tabular-nums" dir="ltr">{formatSAR(revenue)}</div>
         </div>
       </div>
-    </Link>
+    </MotionLink>
   );
 }

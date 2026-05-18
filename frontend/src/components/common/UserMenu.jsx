@@ -4,6 +4,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { LogIn, UserPlus, LogOut } from 'lucide-react';
+import { toast } from 'sonner';
 import { useAuth } from '../../auth/AuthContext.jsx';
 import { useLang } from '../../i18n/LanguageContext.jsx';
 
@@ -73,7 +74,11 @@ export default function UserMenu() {
             </div>
           </div>
           <button
-            onClick={() => { setOpen(false); signOut(); }}
+            onClick={() => {
+              setOpen(false);
+              signOut();
+              toast(t('auth.toast.signedOut'));
+            }}
             className="w-full text-start px-3 py-2 text-sm text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition flex items-center gap-2"
           >
             <LogOut size={16} strokeWidth={2} />

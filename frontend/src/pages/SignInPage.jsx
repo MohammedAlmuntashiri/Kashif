@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
+import { toast } from 'sonner';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useLang } from '../i18n/LanguageContext.jsx';
 
@@ -29,10 +30,13 @@ export default function SignInPage() {
     setBusy(true);
     setError(null);
     try {
-      await signIn({ email, password });
+      const u = await signIn({ email, password });
+      toast.success(t('auth.toast.signedIn', { name: u?.name || u?.email || '' }));
       navigate(redirectTo, { replace: true });
     } catch (err) {
-      setError(t(errToKey(err.message)));
+      const msg = t(errToKey(err.message));
+      setError(msg);
+      toast.error(msg);
     } finally {
       setBusy(false);
     }

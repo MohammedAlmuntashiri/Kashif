@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import { useAuth } from '../auth/AuthContext.jsx';
 import { useLang } from '../i18n/LanguageContext.jsx';
 
@@ -34,10 +35,13 @@ export default function SignUpPage() {
     setBusy(true);
     setError(null);
     try {
-      await signUp({ name, email, password });
+      const u = await signUp({ name, email, password });
+      toast.success(t('auth.toast.welcome', { name: u?.name || name }));
       navigate('/', { replace: true });
     } catch (err) {
-      setError(t(errToKey(err.message)));
+      const msg = t(errToKey(err.message));
+      setError(msg);
+      toast.error(msg);
     } finally {
       setBusy(false);
     }
@@ -103,11 +107,7 @@ export default function SignUpPage() {
           </button>
         </form>
 
-        <div className="text-xs text-slate-400 dark:text-slate-500 mt-4 text-center">
-          {t('auth.signUp.localOnly')}
-        </div>
-
-        <div className="text-sm text-slate-500 dark:text-slate-400 mt-4 text-center">
+        <div className="text-sm text-slate-500 dark:text-slate-400 mt-6 text-center">
           {t('auth.signUp.haveAccount')}{' '}
           <Link
             to="/signin"
