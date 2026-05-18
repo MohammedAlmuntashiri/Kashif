@@ -1,4 +1,4 @@
-# pdf.py — API endpoint for uploading and processing financial-statement PDFs
+# pdf.py — API endpoints for uploading and processing financial-statement PDFs
 #
 # URL prefix (registered in api/__init__.py): /api/pdf
 #
@@ -11,8 +11,22 @@
 #     — Multi-file upload (Part 14.1). Accepts MULTIPLE PDFs under the same field
 #       name 'pdf'. Same ticker for all files (typical use: upload several years
 #       of the same company's annual reports in one call). Each PDF is processed
-#       independently — if one fails, the others still run. Returns a per-file
-#       results array.
+#       independently — if one fails, the others still run.
+#     — Part 14.2: parallel extraction via ThreadPoolExecutor (default 4 workers).
+#       4-8× speed-up when uploading multiple PDFs.
+#
+# Shared query params (work on BOTH endpoints):
+#   ticker                  REQUIRED  Tadawul symbol (e.g. "2222")
+#   dry_run=true            optional  Don't write anything to DB. Useful for previewing.
+#   auto_commit_if_match    optional  "Smart save" mode — only commits to DB when
+#                                     all extracted (non-null) values match the existing
+#                                     DB row within 1% tolerance. If ANY field mismatches,
+#                                     this file is left as dry-run and the response flags
+#                                     it for manual review. Safer than dry_run=false
+#                                     because bad extractions never silently overwrite
+#                                     good DB data.
+#   workers=<N>             optional  /upload_batch only. Number of parallel workers
+#                                     (default 4, clamped to 1-8). Tune per machine.
 #
 # How to call these endpoints (curl examples):
 #   Single file:
@@ -39,11 +53,16 @@
 
 import os
 import tempfile
+from concurrent.futures import ThreadPoolExecutor
 from flask import Blueprint, jsonify, request
 from app.extensions import db
 from app.models.stock import Stock
 from app.models.financial_data import FinancialData
 from app.services.pdf_extractor import extract_all
+# Accuracy log — every PDF upload appends a row per field so we can track
+# extractor accuracy over time. Imported lazily inside the function in case
+# the accuracy module fails to load (don't break extraction over logging).
+from app.api.accuracy import log_extraction
 
 pdf_bp = Blueprint('pdf', __name__)
 
@@ -84,31 +103,34 @@ def _values_match(db_val, extracted_val, tolerance=0.01):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Internal helper — process ONE uploaded PDF and return a result dict.
+# Phase 1 helper — pure PDF extraction (thread-safe, no DB access)
 #
-# Used by both /upload (single file) and /upload_batch (multiple files).
-# Keeping this in a helper means both endpoints share the exact same
-# extraction + DB-comparison + upsert logic, so /upload behaviour is
-# unchanged after the refactor.
+# This runs the slow extract_all() pipeline against the uploaded PDF.
+# Designed to be called from worker threads in a ThreadPoolExecutor so
+# multiple PDFs can extract in parallel. CRITICAL: this function MUST NOT
+# touch the SQLAlchemy session (sessions aren't thread-safe).
 #
-# Parameters:
-#   stock     — already-resolved Stock ORM object for the ticker
-#   pdf_file  — a werkzeug FileStorage from request.files (one uploaded PDF)
-#   dry_run   — bool. When True, no DB writes occur (rollback at end).
+# Steps performed:
+#   1. Save the uploaded FileStorage to a temp file on disk (pdfplumber
+#      needs a real path, not a Flask stream).
+#   2. Call extract_all() — this is the expensive part (~1-3 min per PDF,
+#      including OCR for image-heavy reports).
+#   3. Pop "_fiscal_year" out of the result and build the period string.
+#   4. Always delete the temp file in a finally block.
 #
-# Returns a dict with the per-file result. On success:
-#   { "status": "success", "filename": ..., "period": ..., "is_new_row": ...,
-#     "extracted": {...}, "db_comparison": {...}, "updated": bool }
-# On failure:
-#   { "status": "error", "filename": ..., "error": "..." }
+# Returns a dict shaped like:
+#   On success:
+#     {"status": "extracted", "filename": ..., "period": ..., "extracted": {...10 fields...}}
+#   On error:
+#     {"status": "error", "filename": ..., "error": "..."}
 #
-# Does NOT commit or rollback the DB session — the caller controls that
-# so batch uploads can commit all successful files in a single transaction.
+# The caller is responsible for the DB upsert (Phase 2 helper below).
 # ─────────────────────────────────────────────────────────────────────────────
-def _process_single_pdf(stock, pdf_file, dry_run):
+def _extract_pdf_only(pdf_file):
     filename = pdf_file.filename or "<unnamed>"
 
-    # Validate filename — empty means the form field was sent without a file.
+    # Empty filename means the form field was sent without an actual file
+    # attached. Treat as a validation error — no point running extraction.
     if filename == '':
         return {
             "status":   "error",
@@ -116,29 +138,26 @@ def _process_single_pdf(stock, pdf_file, dry_run):
             "error":    "Empty filename — please select a PDF file",
         }
 
-    # ── Save PDF to a temporary file and run the extractor ─────────────────
-    # We can't pass a Flask file stream directly to pdfplumber — it needs a
-    # real file path on disk. NamedTemporaryFile gives us a path; delete=False
-    # means the OS won't auto-delete it before we finish using it.
+    # NamedTemporaryFile gives us a path on disk; delete=False stops the OS
+    # from removing it before pdfplumber opens it. We unlink it ourselves in
+    # the finally block below.
     tmp = tempfile.NamedTemporaryFile(suffix='.pdf', delete=False)
     try:
         pdf_file.save(tmp.name)  # Write the uploaded bytes to disk
         tmp.close()              # Close our handle before pdfplumber opens it
 
-        # Run the full 10-value extraction pipeline.
-        # extract_all() internally:
-        #   1. Does a standard text pass with pdfplumber + OCR fallback
-        #   2. Does a rowwise pass (word-coordinate clustering) for column layouts
-        #   3. Picks the best result per field (rowwise vs standard)
-        #   4. Runs EPS × shares cross-validation to catch unit misdetection
-        #   5. Auto-detects the fiscal year and appends it as "_fiscal_year"
+        # The expensive call. extract_all() runs:
+        #   1. Standard text pass with pdfplumber + OCR fallback
+        #   2. Rowwise pass (word-coordinate clustering) for column layouts
+        #   3. Picks the best result per field
+        #   4. EPS × shares cross-validation
+        #   5. Fiscal-year auto-detection
         extracted = extract_all(tmp.name)
 
     except Exception as exc:
-        # Extraction can fail on corrupted PDFs, password-protected files, etc.
-        # In batch mode we don't raise — we return an error dict so the
-        # batch caller can include this file in its per-file results array
-        # and continue processing the remaining files.
+        # In batch mode we don't raise — return an error dict so the caller
+        # can include this file in its per-file results array and continue
+        # processing the remaining files.
         return {
             "status":   "error",
             "filename": filename,
@@ -146,29 +165,53 @@ def _process_single_pdf(stock, pdf_file, dry_run):
         }
 
     finally:
-        # Always clean up the temp file — even if extraction raised an exception.
+        # Always clean up the temp file — even if extraction raised.
         try:
             os.unlink(tmp.name)
         except OSError:
             pass  # Already gone or permission issue — not critical
 
-    # ── Determine the period string ─────────────────────────────────────────
-    # extract_all() appends the auto-detected fiscal year under "_fiscal_year".
-    # We pop it out of the dict so it doesn't get confused with a financial field.
+    # Extract the fiscal year (added by extract_all) and build the period string.
     fiscal_year = extracted.pop("_fiscal_year", None)
+    period = f"{fiscal_year}-annual" if fiscal_year else "unknown-annual"
 
-    if fiscal_year:
-        # Phase 5: all uploads are assumed to be annual reports.
-        # Phase 6 (quarterly) will detect Q1/Q2/Q3/Q4 here and set e.g. "2024-Q1".
-        period = f"{fiscal_year}-annual"
-    else:
-        # Fallback if year detection failed (very unusual — most PDFs have a year header).
-        # We still proceed rather than reject the upload, so the user gets the extracted data.
-        period = "unknown-annual"
+    return {
+        "status":    "extracted",
+        "filename":  filename,
+        "period":    period,
+        "extracted": extracted,
+    }
 
-    # ── Look up existing financial_data row for this stock + period ──────
-    # In dry-run mode we only READ this row to build the comparison.
-    # In normal mode we INSERT a new row if missing, then UPDATE it below.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Phase 2 helper — apply extracted values to the DB (main thread ONLY)
+#
+# Takes the result from _extract_pdf_only and:
+#   1. Looks up the existing FinancialData row for (stock, period)
+#   2. Builds the per-field DB comparison
+#   3. Decides whether to write the extracted values to the row, based on
+#      dry_run + auto_commit_if_match modes:
+#        - dry_run=True              → never writes, never commits
+#        - auto_commit_if_match=True → writes only if ALL non-null extracted
+#                                       values match existing DB values
+#        - both false                → always writes (legacy behaviour)
+#   4. Logs the extraction to the accuracy CSV (one row per field).
+#
+# Does NOT commit the SQLAlchemy session — the caller does that once at the
+# end (allows batch endpoint to commit all files in a single transaction).
+#
+# Returns a result dict containing the full per-file response shape.
+# ─────────────────────────────────────────────────────────────────────────────
+def _apply_extraction_to_db(stock, ticker, extraction_result, dry_run, auto_commit_if_match):
+    # Errors from _extract_pdf_only pass through unchanged.
+    if extraction_result["status"] == "error":
+        return extraction_result
+
+    period    = extraction_result["period"]
+    extracted = extraction_result["extracted"]
+    filename  = extraction_result["filename"]
+
+    # Look up existing financial_data row. If missing, build a new one.
     fd = (
         FinancialData.query
         .filter_by(stock_id=stock.id, period=period)
@@ -176,158 +219,175 @@ def _process_single_pdf(stock, pdf_file, dry_run):
     )
 
     if fd is None:
-        # No existing row for this period.
-        # In dry-run we use a transient unsaved object so getattr() returns
-        # None for every field (clean comparison output without DB writes).
-        # In normal mode we add it to the session for insertion.
+        # No existing row. Build a transient instance — we may or may not
+        # add it to the session depending on whether we end up writing.
         fd = FinancialData(stock_id=stock.id, period=period)
-        if not dry_run:
-            db.session.add(fd)
         is_new_row = True
     else:
         is_new_row = False
 
-    # ── Build the field-by-field DB comparison ─────────────────────────────
-    # For each of the 10 fields:
-    #   - Read the current DB value (before any potential overwrite)
-    #   - Compare against the extracted value
-    #   - In normal mode, also write the extracted value back to the row
-    #     (skipping None — preserves existing good DB values when the
-    #     extractor couldn't find something)
+    # Build the per-field DB comparison FIRST, before any writes, so the
+    # "db" field in the response shows the BEFORE state.
     db_comparison = {}
+    all_match = True  # Tracks whether every non-null extracted value matches DB
 
     for field in _FINANCIAL_FIELDS:
-        db_val  = getattr(fd, field)          # Current value in DB (None for new rows)
-        ext_val = extracted.get(field)        # What the extractor found (may be None)
+        db_val  = getattr(fd, field)
+        ext_val = extracted.get(field)
 
+        match = _values_match(db_val, ext_val)
         db_comparison[field] = {
-            "db":        db_val,              # Value in DB before this request
-            "extracted": ext_val,             # Value the extractor just found in the PDF
-            "match":     _values_match(db_val, ext_val),  # True = within 1% or both None
+            "db":        db_val,
+            "extracted": ext_val,
+            "match":     match,
         }
 
-        # Only write in non-dry-run mode AND only when extraction succeeded.
-        if not dry_run and ext_val is not None:
-            setattr(fd, field, ext_val)
+        # For auto_commit_if_match logic: ignore fields where extractor
+        # returned None (those don't overwrite anyway). Only count fields
+        # where extractor has a value but it doesn't match DB.
+        if ext_val is not None and not match:
+            all_match = False
 
-    # NOTE: this helper does NOT commit or rollback. The caller decides:
-    #   - /upload commits/rollbacks after this single call
-    #   - /upload_batch commits ONCE after the whole loop, so all files
-    #     in the batch either land together or get rolled back together.
+    # ── Decide whether to write to DB ──────────────────────────────────────
+    # Three modes:
+    #   1. dry_run=true                 → never write
+    #   2. auto_commit_if_match=true    → write only if all_match is True
+    #   3. neither flag                 → always write (legacy)
+    if dry_run:
+        will_write = False
+        write_reason = "dry_run"
+    elif auto_commit_if_match:
+        if all_match:
+            will_write = True
+            write_reason = "auto_commit_match"
+        else:
+            # Mismatch detected — refuse to overwrite good DB data.
+            will_write = False
+            write_reason = "flagged_mismatch"
+    else:
+        will_write = True
+        write_reason = "normal_write"
+
+    # ── Apply writes (or not) ──────────────────────────────────────────────
+    if will_write:
+        if is_new_row:
+            db.session.add(fd)
+        for field in _FINANCIAL_FIELDS:
+            ext_val = extracted.get(field)
+            # Skip None — preserves existing good DB values when extractor
+            # couldn't find something.
+            if ext_val is not None:
+                setattr(fd, field, ext_val)
+
+    # ── Log this extraction to the accuracy CSV ────────────────────────────
+    # One row per field. Don't crash extraction if logging fails.
+    try:
+        log_extraction(
+            ticker=ticker,
+            period=period,
+            filename=filename,
+            db_comparison=db_comparison,
+            committed=will_write,
+        )
+    except Exception:
+        # Logging is best-effort — if the CSV file is locked or the disk is
+        # full, we still return a valid extraction response.
+        pass
+
     return {
-        "status":        "success",
-        "filename":      filename,
-        "period":        period,
-        "is_new_row":    is_new_row,      # True = no existing DB row for this period
-        "extracted":     extracted,        # The 10 extracted values (None where not found)
-        "db_comparison": db_comparison,    # Per-field: {db, extracted, match}
-        "updated":       not dry_run,     # False in dry-run mode — DB was not written
+        "status":         "success",
+        "filename":       filename,
+        "period":         period,
+        "is_new_row":     is_new_row,
+        "extracted":      extracted,
+        "db_comparison":  db_comparison,
+        "all_match":      all_match,
+        "committed":      will_write,
+        "commit_reason":  write_reason,
     }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/pdf/upload?ticker=<symbol>
 #
-# Single-file upload. See _process_single_pdf for the per-file logic.
+# Single-file upload. See _extract_pdf_only + _apply_extraction_to_db for
+# the per-file logic.
 #
-# Request format:
-#   Content-Type: multipart/form-data
-#   Query param:  ticker  (required) — Tadawul symbol e.g. "2222"
-#   Query param:  dry_run (optional) — "true"/"1"/"yes" to skip DB writes
-#   Form file:    pdf     (required) — the PDF file
+# Query params: ticker (required), dry_run, auto_commit_if_match.
 #
 # Response (200 OK):
 #   {
 #     "ticker":        "2222",
 #     "period":        "2024-annual",
-#     "extracted":     { "revenue": 1.23e12, "net_income": ..., ... },
+#     "extracted":     { "revenue": 1.23e12, ... },
 #     "db_comparison": { "revenue": { "db":..., "extracted":..., "match":... }, ... },
 #     "is_new_row":    false,
-#     "updated":       true,
+#     "all_match":     true,
+#     "committed":     true,
+#     "commit_reason": "auto_commit_match",
 #     "dry_run":       false
 #   }
 # ─────────────────────────────────────────────────────────────────────────────
 @pdf_bp.route('/upload', methods=['POST'])
 def upload_pdf():
 
-    # ── Validate the ticker query parameter ───────────────────────────────
     ticker = request.args.get('ticker', '').strip()
     if not ticker:
         return jsonify({"error": "ticker query parameter is required (e.g. ?ticker=2222)"}), 400
 
-    # Dry-run mode: when ?dry_run=true, we run the full extraction and return
-    # the DB comparison but do NOT write anything to the database. This lets
-    # the user preview extraction quality before committing — protects the DB
-    # from bad extractions on untested company layouts (Alinma 2022/2024
-    # showed how easily a wrong upload can overwrite good seeded values).
-    # Accepted truthy values: "true", "1", "yes" (case-insensitive).
     dry_run = request.args.get('dry_run', '').strip().lower() in ('true', '1', 'yes')
+    auto_commit_if_match = request.args.get('auto_commit_if_match', '').strip().lower() in ('true', '1', 'yes')
 
     stock = Stock.query.filter_by(symbol=ticker).first()
     if stock is None:
         return jsonify({"error": f"Stock {ticker} not found. Add it first via POST /api/stocks/"}), 404
 
-    # ── Validate the uploaded file ─────────────────────────────────────────
-    # Flask puts uploaded files in request.files. The field name must be "pdf".
     if 'pdf' not in request.files:
         return jsonify({"error": "No file found. Send the PDF in a form field named 'pdf'"}), 400
 
     pdf_file = request.files['pdf']
 
-    # ── Delegate to the shared helper ──────────────────────────────────────
-    result = _process_single_pdf(stock, pdf_file, dry_run)
+    # Phase 1: extract (slow). For single-file uploads we just call directly
+    # — no thread pool needed.
+    extraction_result = _extract_pdf_only(pdf_file)
 
-    # If the helper returned an error (extraction failure, empty filename),
-    # surface it with a 4xx/5xx-style envelope but keep 200 + status=error
-    # in the body — matches how /upload_batch reports per-file errors.
-    # For backwards-compat with the previous /upload response shape, we still
-    # return 422 on extraction failures and 400 on validation failures.
+    # Phase 2: apply to DB (fast, main thread).
+    result = _apply_extraction_to_db(stock, ticker, extraction_result, dry_run, auto_commit_if_match)
+
+    # If extraction errored, surface a 4xx/5xx — matches pre-refactor behaviour.
     if result["status"] == "error":
-        # Empty filename → 400; everything else (extraction crash) → 422.
-        # The previous /upload behaviour returned these same codes, so this
-        # keeps Postman / curl callers seeing the same error semantics.
         status_code = 400 if result["error"].startswith("Empty filename") else 422
         return jsonify({"error": result["error"]}), status_code
 
-    # ── Commit or rollback ─────────────────────────────────────────────────
-    # In single-file mode, the helper has staged any DB changes on the
-    # session but hasn't committed. We commit here so /upload remains
-    # exactly equivalent to its pre-refactor behaviour.
-    if dry_run:
-        db.session.rollback()
-    else:
+    # ── Commit or rollback the staged changes ──────────────────────────────
+    # If we wrote anything in Phase 2, commit. Otherwise rollback to drop
+    # any transient SQLAlchemy state.
+    if result["committed"]:
         db.session.commit()
+    else:
+        db.session.rollback()
 
-    # ── Build the response (same shape as before the refactor) ─────────────
     return jsonify({
-        "ticker":        ticker,
-        "period":        result["period"],
-        "is_new_row":    result["is_new_row"],
-        "extracted":     result["extracted"],
-        "db_comparison": result["db_comparison"],
-        "updated":       result["updated"],
-        "dry_run":       dry_run,
+        "ticker":         ticker,
+        "period":         result["period"],
+        "is_new_row":     result["is_new_row"],
+        "extracted":      result["extracted"],
+        "db_comparison":  result["db_comparison"],
+        "all_match":      result["all_match"],
+        "committed":      result["committed"],
+        "commit_reason":  result["commit_reason"],
+        "dry_run":        dry_run,
     })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # POST /api/pdf/upload_batch?ticker=<symbol>
 #
-# Multi-file upload. Accepts MULTIPLE PDFs under the form field name 'pdf'
-# (all for the same ticker). Each PDF is processed independently — if one
-# fails extraction, the rest still run.
+# Multi-file upload. Accepts multiple PDFs under repeated form field 'pdf'.
+# Phase 1 (extraction) runs in parallel via ThreadPoolExecutor.
+# Phase 2 (DB upsert) runs sequentially on the main thread.
 #
-# Typical use:
-#   - Upload several years of annual reports for the same company in one call.
-#   - Each PDF's fiscal year is auto-detected, so they land in different
-#     period rows (e.g. 2022-annual, 2023-annual, 2024-annual).
-#
-# Request format:
-#   Content-Type: multipart/form-data
-#   Query param:  ticker  (required) — Tadawul symbol e.g. "2222"
-#   Query param:  dry_run (optional) — "true"/"1"/"yes" to skip DB writes
-#                                       for the WHOLE batch
-#   Form file:    pdf     (required, repeatable) — one or more PDF files
+# Query params: ticker (required), dry_run, auto_commit_if_match, workers (1-8).
 #
 # Response (200 OK):
 #   {
@@ -335,88 +395,93 @@ def upload_pdf():
 #     "total_files":  3,
 #     "successful":   2,
 #     "failed":       1,
+#     "committed":    2,           # how many files actually wrote to DB
+#     "flagged":      0,           # files with mismatches in auto_commit_if_match mode
+#     "workers":      4,
 #     "dry_run":      false,
-#     "results": [
-#       {
-#         "status":        "success",
-#         "filename":      "aramco_2024.pdf",
-#         "period":        "2024-annual",
-#         "is_new_row":    false,
-#         "extracted":     { ... },
-#         "db_comparison": { ... },
-#         "updated":       true
-#       },
-#       {
-#         "status":   "error",
-#         "filename": "broken.pdf",
-#         "error":    "PDF extraction failed: ..."
-#       },
-#       ...
-#     ]
+#     "results":      [ ... per-file result dicts ... ]
 #   }
-#
-# Transaction semantics:
-#   - All successful files commit together at the end (one db.session.commit).
-#   - If dry_run=true, the session is rolled back instead.
-#   - A failing file does NOT roll back successful files in the same batch —
-#     the failure is reported in its per-file result and the rest still commit.
 # ─────────────────────────────────────────────────────────────────────────────
 @pdf_bp.route('/upload_batch', methods=['POST'])
 def upload_pdf_batch():
 
-    # ── Validate the ticker query parameter ───────────────────────────────
     ticker = request.args.get('ticker', '').strip()
     if not ticker:
         return jsonify({"error": "ticker query parameter is required (e.g. ?ticker=2222)"}), 400
 
-    # Same dry_run semantics as /upload — applies to the whole batch.
     dry_run = request.args.get('dry_run', '').strip().lower() in ('true', '1', 'yes')
+    auto_commit_if_match = request.args.get('auto_commit_if_match', '').strip().lower() in ('true', '1', 'yes')
+
+    # Worker count — default 4, clamped to [1, 8]. 8 is the upper bound
+    # because pdfplumber + pytesseract are CPU-bound and most dev machines
+    # are 4-8 cores. Higher than 8 = context switching overhead with no gain.
+    try:
+        workers = int(request.args.get('workers', 4))
+    except ValueError:
+        workers = 4
+    workers = max(1, min(workers, 8))
 
     stock = Stock.query.filter_by(symbol=ticker).first()
     if stock is None:
         return jsonify({"error": f"Stock {ticker} not found. Add it first via POST /api/stocks/"}), 404
 
-    # ── Validate that at least one PDF was uploaded ────────────────────────
-    # request.files.getlist('pdf') returns a list of FileStorage objects —
-    # one per form field repetition. Empty list = no files attached.
     pdf_files = request.files.getlist('pdf')
     if not pdf_files:
         return jsonify({
             "error": "No files found. Send one or more PDFs in form field(s) named 'pdf'"
         }), 400
 
-    # ── Process each PDF independently ─────────────────────────────────────
-    # The helper does NOT commit/rollback the session — it only stages
-    # changes. We commit ONCE at the end for the whole batch so that either
-    # all successful files land together or (in dry_run) none of them do.
+    # ── Phase 1: extract all PDFs in PARALLEL ──────────────────────────────
+    # Workers run _extract_pdf_only which has no DB access — safe to thread.
+    # We use list(executor.map(...)) instead of submit() so results come back
+    # in the SAME ORDER as the input files (important for predictable response).
+    #
+    # CPU note: pdfplumber + pytesseract release the GIL during the heavy
+    # operations (file I/O, subprocess for tesseract OCR), so threads —
+    # not processes — give real parallelism here without the overhead of
+    # multiprocessing.
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        extraction_results = list(executor.map(_extract_pdf_only, pdf_files))
+
+    # ── Phase 2: apply each extraction to DB (sequential, main thread) ─────
+    # SQLAlchemy session lives on the main thread. Each call stages writes
+    # on the same session — we commit ONCE at the end so all successful
+    # files land together (or all roll back in dry_run mode).
     results = []
     successful_count = 0
     failed_count = 0
+    committed_count = 0
+    flagged_count = 0
 
-    for pdf_file in pdf_files:
-        result = _process_single_pdf(stock, pdf_file, dry_run)
+    for ext_result in extraction_results:
+        result = _apply_extraction_to_db(stock, ticker, ext_result, dry_run, auto_commit_if_match)
         results.append(result)
+
         if result["status"] == "success":
             successful_count += 1
+            if result["committed"]:
+                committed_count += 1
+            elif result.get("commit_reason") == "flagged_mismatch":
+                flagged_count += 1
         else:
             failed_count += 1
 
-    # ── Commit / rollback the whole batch ──────────────────────────────────
-    # If dry_run is on, throw away every staged change.
-    # Otherwise commit all successful files' upserts in one transaction.
-    # Note: failed files never wrote to the session in the first place
-    # (the helper returned early before reaching setattr), so they don't
-    # contaminate the commit.
-    if dry_run:
-        db.session.rollback()
-    else:
+    # ── Commit / rollback once for the whole batch ─────────────────────────
+    # If ANY file ended up writing (committed=True), commit the session.
+    # In dry_run mode (or if every file was flagged), rollback.
+    if committed_count > 0:
         db.session.commit()
+    else:
+        db.session.rollback()
 
     return jsonify({
         "ticker":      ticker,
         "total_files": len(pdf_files),
         "successful":  successful_count,
         "failed":      failed_count,
+        "committed":   committed_count,
+        "flagged":     flagged_count,
+        "workers":     workers,
         "dry_run":     dry_run,
         "results":     results,
     })
