@@ -188,6 +188,17 @@ NET_INCOME_ATTRIBUTION_KEYWORDS = _expand_arabic([
     "Net profit attributable to shareholders of the parent",
     "Profit attributable to equity holders of the parent",
     "Profit attributable to shareholders of the parent",
+    # Generic "attributable to [the] shareholders of [X]" — catches forms
+    # where the issuer puts its own name (BCI, Almarai, etc.) instead of
+    # "the parent" or "the Company". BCI 2023 EPS note: "Profit attributable
+    # to the shareholders of BCI 5,518,143". Without this, the extractor
+    # falls back to "Profit for the year" which is pre-NCI total.
+    "Profit attributable to the shareholders of",
+    "Profit attributable to shareholders of",
+    "Net profit attributable to the shareholders of",
+    "Net profit attributable to shareholders of",
+    "Net income attributable to the shareholders of",
+    "Net income attributable to shareholders of",
     # Insurance variants use passive verb "attributed" instead of the
     # adjective "attributable" — Bupa 2024 prints "Net income attributed
     # to the shareholders". The label/value are split across two lines, so
@@ -417,12 +428,92 @@ DPS_PROSE_DISQUALIFIERS = [
     re.compile(r"\bface\s+value\b", re.I),
     re.compile(r"\bpar\s+value\b", re.I),
     re.compile(r"\bbook\s+value\b", re.I),
+    # The "Nominal Value Trap" — share-capital notes commonly read
+    # "27,500,000 shares stated at Saudi Riyals 10 per share" or
+    # "shares of SAR 10 each". Without these, the extractor returns 10.0 as
+    # the dividend for SRMG, Jarir 2022, Anaam, Jabal Omar, etc.
+    # These patterns are deliberately narrow so we don't reject legitimate
+    # dividend prose that REFERENCES nominal value as a percentage (Habib:
+    # "SR 1.15 per share (representing 11.5% of the nominal value of the share)").
+    re.compile(r"\bshares?\s+stated\s+at\s+(?:SAR|SR|Saudi\s+Riyals?)\b", re.I),
+    re.compile(r"\bshares?\s+of\s+(?:SAR|SR|Saudi\s+Riyals?)\s+\d+(?:\.\d+)?\s+each\b", re.I),
+    re.compile(r"\bordinary\s+shares?\s+of\s+(?:SAR|SR|Saudi)\b", re.I),
+    # Jarir 2022 prints "120 million shares (2021: 120 million shares)
+    # stated at Saudi Riyals 10 per share." — the parenthetical comparative
+    # makes the literal "shares stated at" pattern miss; this looser variant
+    # ("stated at" anywhere in the line followed by SAR/SR/Saudi Riyals + a
+    # bare number + "per share") still scopes tightly enough to avoid Habib's
+    # "11.5% of the nominal value" prose.
+    re.compile(r"\bstated\s+at\s+(?:SAR|SR|Saudi\s+Riyals?)\s+\d+(?:\.\d+)?\s+per\s+share\b", re.I),
+    # Zain 7030 print "898,729,175 subscribed shares (2024: 898,729,175)
+    # stated at 10 per share owned" — no SAR/SR currency prefix at all,
+    # so the _DPS_AT_RX "at <N> per share" pattern is matching the par
+    # value as if it were a dividend. The "stated at … per share owned"
+    # phrasing is unique to capital-declaration text.
+    re.compile(r"\bstated\s+at\s+\d+(?:\.\d+)?\s+per\s+share\s+owned\b", re.I),
+    # SEC 5110 line-break pattern: line ends with "...with a nominal" and the
+    # next visual line starts with "value of SR 10 per share." When the DPS
+    # scanner reads the second line in isolation it sees "value of SR 10 per
+    # share" with no "nominal" qualifier — this catches the "value of <CCY>
+    # <N> per share" continuation as the par-value declaration that it is.
+    re.compile(r"^\s*value\s+of\s+(?:SAR|SR|Saudi\s+Riyals?)\s+\d+(?:\.\d+)?\s+per\s+share\b", re.I),
+    # Whole-line "share capital" check — a dividend statement never makes
+    # "share capital" the LEAD topic of the line, while a capital note always
+    # does ("19. Share capital" / "20 SHARE CAPITAL" / "Share capital reserves").
+    re.compile(r"^\s*\d*\.?\s*share\s+capital\b", re.I),
     re.compile(r"\bfor\s+each\s+quarter\b", re.I),
     re.compile(r"\bper\s+quarter\b", re.I),
     re.compile(r"\bon\s+a\s+quarterly\s+basis\b", re.I),  # policy-description line (STC)
     re.compile(r"\bfor\s+the\s+(?:first|second|third|fourth|\d(?:st|nd|rd|th))\s+quarter\b", re.I),
     re.compile(r"\bfor\s+the\s+(?:1st|2nd|3rd|4th)\s+quarter\b", re.I),
 ]
+
+# Stage-5 fallback: total dividends paid (from CF statement) / shares.
+# Fires only when extract_dividends_per_share returns None. Targets cases
+# where the dividend note states only an aggregate dividend (no per-share),
+# typical of REITs (Jarir 4190, AlAhli REIT 4338) and some banks where the
+# per-share figure is buried in narrative the Stage-3 regexes don't capture.
+DIVIDENDS_PAID_KEYWORDS = _expand_arabic([
+    # Most specific multi-word phrases first (substring match — longer wins).
+    "Dividends announced and paid",
+    "Dividends paid to shareholders",
+    "Dividend paid to shareholders",
+    "Dividends paid to equity holders",
+    "Dividend paid to equity holders",
+    "Final dividend paid",
+    "Interim dividend paid",
+    "Final dividends paid",
+    "Interim dividends paid",
+    # Generic last — order matters because match is substring-based.
+    "Dividends paid",
+    "Dividend paid",
+    "توزيعات أرباح مدفوعة",
+    "أرباح مدفوعة للمساهمين",
+])
+
+# Reject lines that mention "dividends" but are not cash outflows to ordinary
+# equity holders: NCI/minority distributions, dividends received (inflow),
+# dividend income (revenue), unpaid balances, yield assumptions.
+DIVIDENDS_PAID_DISQUALIFIERS = [
+    re.compile(r"non[-\s]?controlling", re.I),
+    re.compile(r"\bminority\b", re.I),
+    re.compile(r"\bNCI\b", re.I),
+    re.compile(r"\bassociate", re.I),
+    re.compile(r"\bjoint\s+ventures?\b", re.I),
+    re.compile(r"\bsubsidiar", re.I),
+    re.compile(r"\bdividend\s+income\b", re.I),
+    re.compile(r"\bdividends?\s+received\b", re.I),
+    re.compile(r"\bdividends?\s+receivable\b", re.I),
+    re.compile(r"\bdividends?\s+payable\b", re.I),     # liability balance, not cash paid
+    re.compile(r"\bdividend\s+yield\b", re.I),
+    re.compile(r"\bdividends?\s+approved\s+but\s+not\s+paid\b", re.I),
+    re.compile(r"\bunclaimed\s+dividends?\b", re.I),
+    re.compile(r"\bdividend\s+(?:declared|proposed)\b", re.I),
+    re.compile(r"\bproposed\s+(?:final\s+)?dividend", re.I),
+    re.compile(r"\bSukuk\b", re.I),                    # Tier-1 sukuk distributions
+    re.compile(r"\bTier\s*1\b", re.I),
+]
+
 
 # Quarterly-batch DPS computation (STC-style): "SR X per share for each quarter"
 _DPS_EACH_QUARTER_RX = re.compile(
@@ -619,6 +710,41 @@ BORROWINGS_COMPONENT_KEYWORDS = _expand_arabic([
     "Loans from Ministry of Finance",
     "Short-term bank loan",
     "Short term bank loan",
+    # Shariah-compliant issuers (Dallah 4004, SAPTCO 4040, Lazurde 4011)
+    # use "Murabaha" as their primary debt instrument. Without these, the
+    # borrowings extractor only picks up lease liabilities and grossly
+    # under-reports (e.g. Dallah 2024: returned 126M = leases only; truth
+    # ~2.0B because "Long-term Murabaha finance and loans 1,188M" was
+    # unmatched).
+    #
+    # ONLY phrases with an explicit "financing" / "finance" / "finance and
+    # loans" qualifier are included. Bare "Short term Murabaha" / "Long term
+    # Murabaha" without the financing qualifier are AMBIGUOUS — telecom
+    # operators (stc 7010, Mobily 7020) carry treasury "Short term Murabaha"
+    # PLACEMENTS as ASSETS (e.g. 7020 BS line: "Short term Murabaha 17
+    # 1,786,374" sitting between Financial-and-other-assets and Cash-and-
+    # cash-equivalents). Including the bare form regressed those cells by
+    # 1.8B–15B per year. Long-form first so longest-substring match wins.
+    "Long-term Murabaha finance and loans",
+    "Long term Murabaha finance and loans",
+    "Long-term Murabaha finance and loan",
+    "Long term Murabaha finance and loan",
+    "Long-term Murabaha financing",
+    "Long term Murabaha financing",
+    "Short-term Murabaha financing",
+    "Short term Murabaha financing",
+    "Short-term Murabaha finance",
+    "Short term Murabaha finance",
+    "Non-current portion of long-term Murabaha",
+    "Non current portion of long term Murabaha",
+    "Current portion of long-term Murabaha finance and loan",
+    "Current portion of long term Murabaha finance and loan",
+    "Current portion of long-term Murabaha",
+    "Current portion of long term Murabaha",
+    "Current portion of Murabaha financing",
+    "Current portion of Murabaha",
+    "Murabaha finance and loans",
+    "Murabaha financing",
     # Combined / generic — Aramco prints just "Borrowings" twice (NC
     # then C, distinguished by section, not label); Almarai uses
     # "Loans and Borrowings"; Jarir uses "Bank borrowings".
@@ -664,6 +790,17 @@ BORROWINGS_DISQUALIFIERS = [
     re.compile(r"net\s+debt", re.I),
     re.compile(r"^lease\s+liabilities\s+continued", re.I),
     re.compile(r"interest\s+on\s+lease\s+liabilities", re.I),
+    # Murabaha deposits / Murabaha receivables / investments in Murabaha are
+    # ASSET-side instruments (company is the lender, not the borrower).
+    # Without these, the new Murabaha keywords would pick up 4001's
+    # "Short-term Murabaha deposits 54,276,065" and 7202's "Murabaha
+    # deposits 900,271" as if they were debt.
+    re.compile(r"murabaha\s+deposit", re.I),
+    re.compile(r"murabaha\s+receivable", re.I),
+    re.compile(r"investments?\s+in\s+murabaha", re.I),
+    re.compile(r"income\s+from\s+(?:short\s+term\s+)?murabaha", re.I),
+    # Note-page references that aren't BS line items
+    re.compile(r"^\s*\d{1,2}\.\s+murabaha\s+financing\s*$", re.I),  # "21. MURABAHA FINANCING" header
 ]
 
 
@@ -772,6 +909,15 @@ OCF_KEYWORDS = _expand_arabic([
     "Cash flows generated from operating activities",
     "Cash flows from / (used in) operating activities",
     "Cash flows from/(used in) operating activities",
+    # NOTE: bare "Cash flows from operating activities" was attempted for
+    # Bahri 4030 (which uses that prefix-free form on its consolidated CF
+    # statement). Reverted because (a) Bahri's actual consolidated CF page
+    # is image-rendered so text extraction returns nothing there anyway,
+    # and (b) the bare phrase matches NCI-note subsidiary-CF tables for
+    # groups with non-controlling interests (Bahri's note 31 carries
+    # "Cash flows from operating activities 1,225,717" for the NCC
+    # subsidiary). Picking that up returns the wrong source. Until OCR
+    # cleanup lands for image-only CF pages, Bahri stays null.
     # Arabic
     "صافي التدفق النقدي من الأنشطة التشغيلية",
     "صافي النقد المتولد من الأنشطة التشغيلية",
@@ -855,6 +1001,16 @@ CAPEX_KEYWORDS = _expand_arabic([
     "Purchase of biological assets",
     "Purchase of Warehouse Facilities",
     "Additions to warehouse facilities",
+    # REIT funds (4330, 4338) — capex is improvements/acquisition of
+    # investment properties. AlAhli REIT 2022 CF shows "Capital improvements
+    # to investment properties" 47,170k — without this, FCF defaulted to CFO
+    # which DB stored as if it were FCF (135,817k vs true FCF 48,565k).
+    "Acquisition of investment properties",
+    "Acquisitions of investment properties",
+    "Additions to investment properties",
+    "Purchase of investment properties",
+    "Capital improvements to investment properties",
+    "Capital improvements",
     # Broader fallbacks for unusual labels
     "Additions to fixed assets",
     "Purchase of fixed assets",
@@ -934,6 +1090,25 @@ UNIT_PATTERNS = [
     # "Saudi Riyals millions/thousands" (STC's reversed phrasing)
     (re.compile(r"\b(?:Saudi\s+Riyals?|SAR|SR)\s+millions?\b", re.I), 1_000_000),
     (re.compile(r"\b(?:Saudi\s+Riyals?|SAR|SR)\s+thousands?\b", re.I), 1_000),
+    # SNB-style: "rounded off to the nearest thousand Saudi Arabian Riyals"
+    # (or just "to the nearest thousand" / "nearest million"). Catches the
+    # legalese phrasing used by some banks where the unit is not in a header
+    # but buried in a basis-of-preparation paragraph.
+    (re.compile(r"\b(?:rounded\s+(?:off\s+)?)?to\s+the\s+nearest\s+millions?\b", re.I), 1_000_000),
+    (re.compile(r"\b(?:rounded\s+(?:off\s+)?)?to\s+the\s+nearest\s+thousands?\b", re.I), 1_000),
+    # "(All amounts in thousands unless otherwise stated)" — SEC 5110, Zain 7030.
+    # The currency is unstated but always SAR in Tadawul filings. The header
+    # appears on every page, so we accept this generic form. The "all amounts"
+    # prefix scopes it tightly enough to avoid generic prose ("the company
+    # transferred thousands of riyals…" wouldn't match because no "all amounts").
+    (re.compile(r"\ball\s+amounts\s+in\s+millions?\b", re.I), 1_000_000),
+    (re.compile(r"\ball\s+amounts\s+in\s+thousands?\b", re.I), 1_000),
+    # Unicode Saudi Riyal symbol (⃀ U+20C0). SHAMS 4170 2025 PDF prints
+    # "All amounts in thousands ⃀ unless otherwise stated" — pdfplumber
+    # extracts the glyph but our SAR|SR|Saudi Riyals literal alternation
+    # was missing it.
+    (re.compile(r"\bin\s+millions?\s+⃀\b", re.I), 1_000_000),
+    (re.compile(r"\bin\s+thousands?\s+⃀\b", re.I), 1_000),
     # Parenthesised "(in millions)" or "(in thousands)" — last-resort English
     (re.compile(r"\(\s*in\s+millions?\s*\)", re.I), 1_000_000),
     (re.compile(r"\(\s*in\s+thousands?\s*\)", re.I), 1_000),
@@ -943,12 +1118,75 @@ UNIT_PATTERNS = [
 ]
 
 
+# Strict subset of UNIT_PATTERNS used ONLY for the document-level fallback
+# (set once per PDF in _set_doc_unit_fallback). Each pattern here represents
+# a Basis-of-Preparation-style declaration of the document-wide unit. Per-note
+# captions ("(in million)", "SR'000" column headers, "(in thousand Saudi Riyal):"
+# inside a single contingencies table) are NOT included here because applying
+# their unit to the whole document would wrongly scale unrelated raw-Riyal
+# statements — observed regression on 4210 SRMG, 4240 Fawaz Alhokair, and
+# 6002 Halwani Bros when the broader UNIT_PATTERNS list was used.
+DOC_LEVEL_UNIT_PATTERNS = [
+    # "to the nearest (thousand|million)" — the "rounded (off)?" prefix is
+    # optional and tolerates the zero-space form "roundedoff" that pdfplumber
+    # produces on some bank PDFs (1180 SNB 2025: line ends "haveebeenroundedoff"
+    # with no spaces and the next line starts "to the nearest thousand"). The
+    # whole "rounded ... " prefix is wrapped in a non-capturing optional group
+    # so a bare "to the nearest thousand" also qualifies — verified safe
+    # because the false-positive PDFs (4210/4240/6002) do not contain the
+    # "to the nearest thousand" phrase anywhere.
+    # Covers 1180 SNB, 8010 Tawuniya, 8210 Bupa, 2280 Almarai, 1120 Al Rajhi.
+    (re.compile(r"\b(?:rounded\s*(?:off)?\s+)?to\s+the\s+nearest\s+millions?\b", re.I), 1_000_000),
+    (re.compile(r"\b(?:rounded\s*(?:off)?\s+)?to\s+the\s+nearest\s+thousands?\b", re.I), 1_000),
+    # "All amounts (are) in millions/thousands ... (Saudi|unless|otherwise|Riyals)"
+    # — SABIC's "All amounts in thousands of Saudi Riyals unless otherwise stated"
+    # plus minor variants. The trailing "Saudi|unless|otherwise|Riyals" anchor
+    # keeps this from matching bare "all amounts in thousands" appearing inside
+    # a per-note caption with no policy tail.
+    (re.compile(r"\ball\s+amounts\s+(?:are\s+)?(?:presented\s+|expressed\s+|stated\s+)?in\s+millions?\b[^.]*?(?:unless|otherwise|Saudi|Riyals?|SAR|SR)\b", re.I), 1_000_000),
+    (re.compile(r"\ball\s+amounts\s+(?:are\s+)?(?:presented\s+|expressed\s+|stated\s+)?in\s+thousands?\b[^.]*?(?:unless|otherwise|Saudi|Riyals?|SAR|SR)\b", re.I), 1_000),
+]
+
+
+# Mutable container holding the document-level unit multiplier. Set once per
+# extract_all() call via _set_doc_unit_fallback() so that per-page _detect_unit
+# calls can fall back to it when a value page doesn't carry its own header
+# (e.g. SNB 2025, Al Rajhi 2025, SABIC 2022 — unit declared in Basis-of-
+# Preparation section, deep in the notes, but the income/BS pages are blank).
+# Using a list (not a plain global) so the closure-style read in _detect_unit
+# always sees the latest value.
+_DOC_UNIT_FALLBACK = [1]
+
+
+def _set_doc_unit_fallback(pages):
+    """Pre-scan all page text once and cache a document-level unit multiplier.
+    Called from extract_all() before any extractor runs. The result is used
+    by _detect_unit() as a fallback when the per-page scan finds no unit hint.
+
+    Uses DOC_LEVEL_UNIT_PATTERNS (strict subset of UNIT_PATTERNS) — only
+    Basis-of-Preparation-style declarations qualify. Per-note captions like
+    "(in million)" or "SR'000" column headers can't pollute the global default.
+    Per-page _detect_unit still uses the full UNIT_PATTERNS list, so genuine
+    per-page unit headers continue to work for mixed-unit PDFs."""
+    joined = "\n".join(t for _, t in pages)
+    for pattern, mult in DOC_LEVEL_UNIT_PATTERNS:
+        if pattern.search(joined):
+            _DOC_UNIT_FALLBACK[0] = mult
+            return mult
+    _DOC_UNIT_FALLBACK[0] = 1
+    return 1
+
+
 def _detect_unit(text):
-    """Scan text for unit hints; return multiplier (1, 1_000, or 1_000_000)."""
+    """Scan text for unit hints; return multiplier (1, 1_000, or 1_000_000).
+    Falls back to the document-level unit (set once per PDF by
+    _set_doc_unit_fallback) when no per-page hint is found — fixes PDFs
+    where the unit declaration is in Basis-of-Preparation but the values
+    are on different pages."""
     for pattern, mult in UNIT_PATTERNS:
         if pattern.search(text):
             return mult
-    return 1
+    return _DOC_UNIT_FALLBACK[0]
 
 
 # ── Number parsing ──────────────────────────────────────────────
@@ -1704,9 +1942,17 @@ def extract_eps(pages):
         rows so total-EPS wins over continuing-ops EPS.
     """
     income_pages = _pages_matching_patterns(pages, INCOME_STATEMENT_PATTERNS)
+    # next_line_fallback=True: notes-style EPS rows can wrap the label across
+    # two lines (Mouwasat 4002 2024 note 34: "Basic and diluted earnings per
+    # share attributable to the shareholders of the" \n "Company 3.23 3.29").
+    # Safe because require_decimal=True rejects integer note refs, max_abs=500
+    # filters out income-total numbers, and EPS_DISQUALIFIERS skips the
+    # "continuing operations" / "before zakat" rows that would otherwise sit
+    # adjacent on the same note page.
     eps_kwargs = dict(skip_unit=True, last=True, exclude=EPS_DISQUALIFIERS,
                       min_abs=0.01, max_abs=500, require_decimal=True,
-                      keyword_priority_over_page=True)
+                      keyword_priority_over_page=True,
+                      next_line_fallback=True)
     for subset in (income_pages, pages):
         for anchor_start in (True, False):
             n = _extract_in_pages(subset, EPS_KEYWORDS,
@@ -2148,6 +2394,21 @@ def extract_shares_outstanding(pages):
                         continue
 
                     scaled = n * effective_unit
+                    # Detect over-scaling caused by the page-level "thousands"
+                    # unit being applied to a share-count row that was already
+                    # printed in raw shares. Trigger: no inline qualifier (so
+                    # not Aramco/SNB which explicitly say "(in millions)"), a
+                    # page-level multiplier is in play, scaled lands in the
+                    # 5B+ "Aramco-tier" zone, and raw is itself a plausible
+                    # Tadawul share count. Fixes 2070 SPIMACO (raw 119,355,000
+                    # was scaled to 119.35B), 2050 Savola, 7202 stc. SABIC and
+                    # other genuine thousand-scaled share rows are unaffected
+                    # because their scaled value is well below 5B.
+                    if (inline_m is None and effective_unit != 1
+                            and scaled > 5_000_000_000
+                            and _MIN_SHARES <= n <= _MAX_SHARES):
+                        return n
+
                     if _MIN_SHARES <= scaled <= _MAX_SHARES:
                         return scaled
                     # Raw fallback: share count already in full units on this page
@@ -2241,6 +2502,17 @@ def extract_dividends_per_share(pages, year=None):
         rf"total\s+interim\s+dividends\s+for\s+the\s+year\s+{yr}\b.{{0,1000}}?\bat\s+([\d.]+)\s+per\s+share",
         re.I | re.DOTALL,
     )
+    # Detect explicit "(YEAR: Nil)" / "(YEAR: none)" no-dividend declarations.
+    # BCI 1210 FY2024 PDF Note 35 ends with "(2024: Nil)" — the fiscal year was
+    # explicitly declared as having no dividend, but Stage 4 fallback was
+    # grabbing the FY2023 dividend amount mentioned on the prior line.
+    if year:
+        _dps_explicit_nil_rx = re.compile(
+            rf"\(\s*{yr}\s*[:\s]\s*(?:nil|none|no\s+dividend|—|-)\s*\)",
+            re.I,
+        )
+    else:
+        _dps_explicit_nil_rx = None
     if year:
         _future_alts   = "|".join(str(y) for y in range(year + 1, year + 6))
         _dps_future_rx = re.compile(rf"\b(?:{_future_alts})\b")
@@ -2249,6 +2521,18 @@ def extract_dividends_per_share(pages, year=None):
 
     div_pages = _pages_matching_patterns(pages, DIVIDEND_NOTE_PATTERNS)
     search_pages = div_pages or pages
+
+    # Stage 0 guard — explicit "(FY: Nil)" declaration in the DIVIDEND NOTE.
+    # BCI 1210 FY2024 Note 35 ends with "(2024: Nil)" after describing the
+    # FY2023 SAR 1/share distribution — Stage 4 was grabbing 1.0 from the
+    # prior-year line. Restricting to div_pages avoids false positives on
+    # non-dividend "(YEAR: Nil)" patterns elsewhere in the report (loan
+    # commitments, level-1/2 transfers, etc.).
+    if _dps_explicit_nil_rx is not None and div_pages:
+        for _, text in div_pages:
+            if _dps_explicit_nil_rx.search(text):
+                return None
+
     _min, _max = 0.01, 100.0
 
     def _parse(s):
@@ -2417,6 +2701,72 @@ def extract_dividends_per_share(pages, year=None):
     return result
 
 
+def _extract_dividends_paid_total(pages):
+    """Sum 'dividends paid' lines from the cash-flow statement.
+
+    Stage-5 fallback support: when extract_dividends_per_share returns None,
+    the orchestrator computes DPS = total_dividends_paid / shares_outstanding.
+    This helper supplies the numerator.
+
+    Restricted to CF pages so balance-sheet "Dividends payable" lines and
+    income-statement "Dividend income" lines don't pollute the sum. Within
+    each matching line, the FIRST plausible number is used (current-year
+    column; comparatives sit further right). Returns the absolute SAR value
+    or None if nothing was found.
+
+    Multiple dividend-paid lines on the same cash-flow statement are summed
+    (e.g. SNB 2025 lists "Final dividend paid for 2024" + "Interim dividend
+    paid for first half of 2025" as separate rows — both are 2025 outflows).
+    """
+    cf_pages = _pages_matching_patterns(pages, CASH_FLOW_STATEMENT_PATTERNS)
+    if not cf_pages:
+        return None
+
+    # Order keywords longest-first so multi-word phrases match before the
+    # generic "Dividends paid" / "Dividend paid" — prevents the generic match
+    # from short-circuiting on a line that actually contains a more specific
+    # phrase whose disqualifier check we still want to apply.
+    kws_sorted = sorted(DIVIDENDS_PAID_KEYWORDS, key=len, reverse=True)
+    kw_lowers = [(kw, kw.lower()) for kw in kws_sorted]
+
+    total = 0.0
+    found = False
+    seen_lines = set()  # avoid double-counting the same physical line
+
+    for _, text in cf_pages:
+        text_norm = _normalize_apostrophes(text)
+        page_unit = _detect_unit(text_norm)
+        for line in text_norm.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            stripped_lower = stripped.lower()
+
+            # Must contain a "dividend paid" phrase.
+            if not any(kw_lower in stripped_lower for _, kw_lower in kw_lowers):
+                continue
+            # Filter out NCI/associates/dividend-income/payable/etc.
+            if any(p.search(stripped) for p in DIVIDENDS_PAID_DISQUALIFIERS):
+                continue
+            # De-dupe (CF page sometimes appears in both standard + cf-anchor sets).
+            if stripped in seen_lines:
+                continue
+            seen_lines.add(stripped)
+
+            # First numeric token = current-year column.
+            n = _first_plausible_number(stripped, min_abs=100,
+                                        require_decimal=False)
+            if n is None:
+                continue
+            scaled = abs(n) * page_unit
+            # Sanity: at least 100K SAR — filters out scraps like note refs.
+            if scaled >= 100_000:
+                total += scaled
+                found = True
+
+    return total if found else None
+
+
 # ── Orchestrator ────────────────────────────────────────────────
 
 # Currency-like values where the rowwise re-extraction often surfaces a
@@ -2459,6 +2809,12 @@ def extract_all(pdf_path, year=None):
     """
     standard_pages, rowwise_pages = _extract_text_dual(pdf_path)
     detected_year = year or _detect_fiscal_year(standard_pages)
+    # Document-level unit fallback — scan all pages once so _detect_unit() can
+    # use the global unit declaration when the per-page text has no hint
+    # (e.g. Al Rajhi 2025, SNB 2025: "rounded off to the nearest thousand" sits
+    # on a notes page far from the income/BS pages, so per-page detection
+    # returned multiplier=1 and every monetary field came out 1000× too low).
+    _set_doc_unit_fallback(standard_pages)
     extractors = {
         "revenue":              extract_revenue,
         "net_income":           extract_net_income,
@@ -2502,6 +2858,96 @@ def extract_all(pdf_path, year=None):
         _s_scaled = _s * 1_000
         if 0.7 <= abs(_s_scaled * _e) / abs(_n) <= 1.5:
             result["shares_outstanding"] = _s_scaled
+
+    # Field-displacement guard: if shares_outstanding equals net_income (or is
+    # within 1%), the shares extractor most likely captured a profit row by
+    # mistake (BCI: "Profit attributable to the shareholders of BCI 5,518,143"
+    # was returned as the share count instead of 27,500,000). When this
+    # happens, the cross-validation above won't fire because the ratio
+    # is far from both 0.01 and 1.0. Drop the bad value rather than
+    # writing it to the DB.
+    _s = result.get("shares_outstanding")
+    _n = result.get("net_income")
+    if (_s and _n and abs(_n) > 1
+            and abs(abs(_s) - abs(_n)) / abs(_n) < 0.01):
+        result["shares_outstanding"] = None
+
+    # Stage-5 shares fallback: when no share count was extracted directly,
+    # back-compute it from |net_income| / |EPS|. The EPS note already carries
+    # both quantities for any company that reports per-share figures, so this
+    # fallback succeeds whenever NI + EPS were extracted — particularly useful
+    # for REITs and small caps whose share-count line uses prose phrasing the
+    # SHARES_OUTSTANDING_KEYWORDS list does not yet cover.
+    #
+    # Risk control:
+    #   - Only fires when shares_outstanding is None (so cannot regress any
+    #     stock that the direct extractor handled successfully).
+    #   - Requires EPS magnitude >= 0.05 to avoid divide-by-near-zero blow-ups
+    #     on REITs where EPS is mis-extracted as a tiny mantissa.
+    #   - Requires the computed result to land in [5M, 500B] — the same
+    #     Tadawul-plausible range used by the direct extractor's [_MIN_SHARES,
+    #     _MAX_SHARES] guard, with the lower bound raised from 1M to 5M to
+    #     reject obviously-wrong combinations like 4338/2022 (NI/EPS = 1.56M)
+    #     and 4330/2022 (NI/EPS = 675K) where the EPS itself was wildly off.
+    #   - The downstream DPS Stage-5 will use this value, so getting it close
+    #     to truth here compounds into a DPS match for REITs whose CF carries
+    #     a "dividends paid" line.
+    if result.get("shares_outstanding") is None:
+        _ni = result.get("net_income")
+        _eps = result.get("eps")
+        if _ni and _eps and abs(_eps) >= 0.05:
+            _shares = abs(_ni) / abs(_eps)
+            if 5_000_000 <= _shares <= 500_000_000_000:
+                result["shares_outstanding"] = _shares
+
+    # Stage-5 DPS fallback: total dividends paid (from CF statement) / shares.
+    # Only fires when the dedicated DPS extractor returned None, so it cannot
+    # regress disagrees — it just converts extractor_null → match for issuers
+    # whose dividend note states only an aggregate amount (REITs especially)
+    # or whose per-share figure sits in narrative the Stage-3 regexes miss.
+    # Plausibility bounds match Stage-3 (_min=0.01, _max=100); a value outside
+    # this range is treated as a misread and the field stays None.
+    #
+    # False-positive guards (added to kill confirmed FPs from prior runs):
+    #   - Loss-year guard: companies posting a net loss almost never declare
+    #     ordinary dividends. Picking up a residual CF dividends-paid line
+    #     during a loss year is virtually always either (a) an NCI distribution
+    #     the per-line disqualifiers missed, or (b) a prior-year-dividend payout
+    #     that belongs to the comparative column. Examples killed: 4250 Jabal
+    #     Omar 2022 (DPS 0.05), 8010 Tawuniya 2022 (DPS 1.56) — both had
+    #     reported losses per Argaam yet Stage-5 returned a non-zero DPS.
+    #   - NCI-size guard: ordinary-shareholder dividend payouts are typically
+    #     20%-60% of net income. When the extracted paid_total is under 2% of
+    #     |net_income|, it is overwhelmingly likely to be a non-controlling-
+    #     interest distribution that slipped past the line-level NCI filter.
+    #     Example killed: 2070 SPIMACO (paid_total 2.78M vs NI ~600M = 0.46%).
+    if result.get("dividends_per_share") is None:
+        _shares = result.get("shares_outstanding")
+        if _shares and _shares > 0:
+            _paid = _extract_dividends_paid_total(standard_pages)
+            if _paid is None:
+                _paid = _extract_dividends_paid_total(rowwise_pages)
+            if _paid is not None:
+                _ni = result.get("net_income")
+                # Loss-year guard — skip when NI is negative or near-zero.
+                # Allow NI=None (no signal) to fall through to size check.
+                loss_year = (_ni is not None and _ni <= 0)
+                # NCI-size guard — skip when paid_total looks like NCI noise.
+                nci_noise = (_ni is not None and abs(_ni) > 0
+                             and _paid / abs(_ni) < 0.02)
+                # NOTE: an "implausible-ratio guard" (paid_total > 3x |NI|)
+                # was tried and removed. It killed 7030 Zain 2025 (DPS 0.5028
+                # match → null) because Zain's NI was mis-extracted as 9.3M
+                # vs the true ~450M, making the ratio 48x even though the
+                # paid_total and DPS were both correct. The guard only ever
+                # "caught" 1210 BCI, which was already failing pre-Tier 1
+                # (disagree → null is still a fail). Net impact was -1 cell.
+                if loss_year or nci_noise:
+                    pass  # do not fill; leave dividends_per_share as None
+                else:
+                    _dps = _paid / _shares
+                    if 0.01 <= _dps <= 100:
+                        result["dividends_per_share"] = round(_dps, 4)
 
     result["_fiscal_year"] = detected_year
     return result
