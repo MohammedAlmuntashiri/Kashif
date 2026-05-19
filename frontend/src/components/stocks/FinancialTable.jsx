@@ -49,7 +49,9 @@ export default function FinancialTable({ financials }) {
             {periods.map((p) => (
               <th
                 key={p}
-                className="text-end py-2.5 px-3 font-semibold text-slate-600 dark:text-slate-400 text-xs uppercase tracking-wide whitespace-nowrap"
+                // Physical right + dir="ltr" so period labels and the numeric
+                // cells below them line up identically in both LTR and RTL.
+                className="text-right py-2.5 px-3 font-semibold text-slate-600 dark:text-slate-400 text-xs uppercase tracking-wide whitespace-nowrap"
                 dir="ltr"
               >
                 {p}
@@ -66,7 +68,7 @@ export default function FinancialTable({ financials }) {
               {financials.map((fd) => (
                 <td
                   key={fd.period}
-                  className="py-2.5 px-3 text-end tabular-nums text-slate-900 dark:text-slate-100 whitespace-nowrap"
+                  className="py-2.5 px-3 text-right tabular-nums text-slate-900 dark:text-slate-100 whitespace-nowrap"
                   dir="ltr"
                 >
                   {fmt(fd[key])}

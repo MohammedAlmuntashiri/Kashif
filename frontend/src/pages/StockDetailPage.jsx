@@ -1,15 +1,19 @@
 // Single-stock detail page.
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
+import { usePolling } from '../hooks/usePolling.js';
 import { Link, useParams } from 'react-router-dom';
 
 import { getStock } from '../services/api.js';
 import { StockDetailSkeleton } from '../components/common/Skeleton.jsx';
 import ValuationBadge from '../components/common/ValuationBadge.jsx';
 import ValuationGauge from '../components/stocks/ValuationGauge.jsx';
+import StockNoteCard from '../components/stocks/StockNoteCard.jsx';
+import WatchlistStar from '../components/stocks/WatchlistStar.jsx';
+import { recordRecentlyViewed } from '../components/stocks/RecentlyViewedStrip.jsx';
 import FinancialTable from '../components/stocks/FinancialTable.jsx';
 import UploadSection from '../components/stocks/UploadSection.jsx';
-import NewsList from '../components/news/NewsList.jsx';
+import PeersInSector from '../components/stocks/PeersInSector.jsx';
 import StockLogo from '../components/stocks/StockLogo.jsx';
 import { formatSARPerShare } from '../utils/format.js';
 import { useLang } from '../i18n/LanguageContext.jsx';
@@ -18,16 +22,22 @@ export default function StockDetailPage() {
   const { t, tSector, lang } = useLang();
   const { ticker } = useParams();
 
-  const [data,  setData]  = useState(null);
-  const [error, setError] = useState(null);
+  // Live polling — 30s on the detail page so price + valuation gauge
+  // stay current; the hook resets state when `ticker` changes.
+  const { data, error } = usePolling(() => getStock(ticker), 30_000, [ticker]);
 
+  // Remember this visit for the home page's "recently viewed" strip.
+  // MUST be declared above any conditional return — React's rules-of-hooks
+  // require the same number of hooks on every render.
   useEffect(() => {
-    setData(null);
-    setError(null);
-    getStock(ticker)
-      .then(setData)
-      .catch((e) => setError(e.response?.data?.error || e.message));
-  }, [ticker]);
+    if (data?.symbol) {
+      recordRecentlyViewed({
+        symbol:  data.symbol,
+        name_en: data.name_en,
+        name_ar: data.name_ar,
+      });
+    }
+  }, [data?.symbol, data?.name_en, data?.name_ar]);
 
   if (error) {
     return (
@@ -48,7 +58,15 @@ export default function StockDetailPage() {
     market_price,
     financials,
     valuation,
+    valuation_unavailable_reason,
   } = data;
+
+  // Treat a valuation row with no fair_value the same as having no row at all,
+  // so the "unavailable" message is shown consistently.
+  const hasFairValue = !!(valuation && valuation.fair_value != null);
+  const unavailableKey = valuation_unavailable_reason
+    ? `val.unavailable.${valuation_unavailable_reason}`
+    : 'val.none';
 
   // Pick the headline name based on UI language.
   const primaryName   = lang === 'ar' ? name_ar : name_en;
@@ -75,6 +93,7 @@ export default function StockDetailPage() {
                 <h1 className="font-display text-3xl sm:text-4xl font-bold text-slate-900 dark:text-slate-100 tracking-tight tabular-nums" dir="ltr">
                   {symbol}
                 </h1>
+                <WatchlistStar symbol={symbol} size={22} />
                 <span className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2.5 py-1 rounded-full font-medium">
                   {tSector(sector)}
                 </span>
@@ -101,7 +120,7 @@ export default function StockDetailPage() {
       <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm">
         <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100 mb-4">{t('val.title')}</h2>
 
-        {valuation ? (
+        {hasFairValue ? (
           <>
             <div className="flex items-center gap-4 mb-4 flex-wrap">
               <div className="text-2xl text-slate-900 dark:text-slate-100">
@@ -149,8 +168,13 @@ export default function StockDetailPage() {
             )}
           </>
         ) : (
-          <div className="text-slate-500 dark:text-slate-400 italic">
-            {t('val.none')}
+          <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-lg p-4">
+            <div className="text-amber-900 dark:text-amber-200 font-semibold mb-1">
+              {t('val.unavailable.title')}
+            </div>
+            <div className="text-amber-800 dark:text-amber-300 text-sm leading-relaxed">
+              {t(unavailableKey)}
+            </div>
           </div>
         )}
       </section>
@@ -162,12 +186,13 @@ export default function StockDetailPage() {
       </section>
 
       {/* PDF upload section (preview only — never writes DB) */}
+      {/* Personal notes — only renders when signed in. */}
+      <StockNoteCard ticker={symbol} />
+
       <UploadSection ticker={symbol} />
 
-      {/* Stock-specific news */}
-      <section className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 shadow-sm">
-        <NewsList ticker={symbol} title={t('news.stockTitle', { ticker: symbol })} />
-      </section>
+      {/* Peers in the same sector — quick link to comparable stocks. */}
+      <PeersInSector currentSymbol={symbol} sectorEn={sector} />
 
     </div>
   );

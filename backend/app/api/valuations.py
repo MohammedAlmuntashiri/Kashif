@@ -86,6 +86,7 @@ def get_valuation(ticker):
     return jsonify({
         "symbol":        stock.symbol,
         "name_en":       stock.name_en,
+        "name_ar":       stock.name_ar,
         "market_price":  stock.market_price,
 
         # Individual model outputs (any can be null)

@@ -11,6 +11,13 @@ echo "PostgreSQL is ready!"
 echo "Running migrations..."
 flask db upgrade
 
-# Start Flask server
-# --host=0.0.0.0 allows connections from outside the container (your browser)
-flask run --host=0.0.0.0
+# Hand off to whatever was passed as the container command. The backend
+# service uses the default below (Flask dev server). Other services like
+# the scheduler pass their own command in docker-compose (`python scheduler.py`)
+# and skip Flask entirely.
+if [ "$#" -eq 0 ]; then
+    # --host=0.0.0.0 allows connections from outside the container (your browser)
+    exec flask run --host=0.0.0.0
+else
+    exec "$@"
+fi

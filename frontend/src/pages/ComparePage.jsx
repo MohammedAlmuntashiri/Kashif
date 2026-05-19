@@ -1,6 +1,7 @@
 // Cross-sector comparison page.
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
+import { usePolling } from '../hooks/usePolling.js';
 
 import { getComparisons } from '../services/api.js';
 import LoadingSpinner from '../components/common/LoadingSpinner.jsx';
@@ -9,15 +10,10 @@ import { useLang } from '../i18n/LanguageContext.jsx';
 
 export default function ComparePage() {
   const { t, tSector } = useLang();
-  const [rows, setRows]                 = useState(null);
-  const [error, setError]               = useState(null);
   const [activeSector, setActiveSector] = useState(null);
-
-  useEffect(() => {
-    getComparisons()
-      .then(setRows)
-      .catch((e) => setError(e.message));
-  }, []);
+  // Live polling — 60s for peer ratios; they update when the scheduler
+  // recomputes comparisons after each 10-min price refresh.
+  const { data: rows, error } = usePolling(getComparisons, 60_000);
 
   const sectors = useMemo(() => {
     if (!rows) return [];

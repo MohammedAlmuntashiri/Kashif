@@ -12,3 +12,6 @@ pdf2image
 pytesseract
 bcrypt
 PyJWT
+reportlab
+arabic-reshaper
+python-bidi

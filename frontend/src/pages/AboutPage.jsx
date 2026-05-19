@@ -3,7 +3,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import {
-  Target, FileText, Scale, Newspaper, Globe2, ShieldCheck,
+  Target, FileText, Scale, Globe2, ShieldCheck,
   Sparkles, ArrowRight,
 } from 'lucide-react';
 import { useLang } from '../i18n/LanguageContext.jsx';
@@ -53,7 +53,7 @@ export default function AboutPage() {
             {t('about.what.subtitle')}
           </p>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
           <Feature
             icon={FileText}
             title={t('about.feature.extract.title')}
@@ -63,11 +63,6 @@ export default function AboutPage() {
             icon={Scale}
             title={t('about.feature.value.title')}
             body={t('about.feature.value.body')}
-          />
-          <Feature
-            icon={Newspaper}
-            title={t('about.feature.news.title')}
-            body={t('about.feature.news.body')}
           />
         </div>
       </section>

@@ -122,8 +122,48 @@ export const uploadPdf = (ticker, file, { dryRun = false } = {}) => {
   return api.post('/pdf/upload', form, {
     params,
     headers: { 'Content-Type': 'multipart/form-data' },
+    // OCR-heavy scanned PDFs can take several minutes. Override the
+    // global 30s timeout for this single call so the extractor has room.
+    timeout: 480000,
   }).then((r) => r.data);
 };
+
+// POST /api/pdf/report/<ticker>?lang=en|ar
+// Sends the dry-run extraction result the frontend already has and
+// gets back a PDF report (blob) for immediate download. `lang` chooses
+// which localized variant to render (full RTL + Arabic font when lang='ar').
+export const downloadExtractionReport = (ticker, result, sourceFilename, lang = 'en') =>
+  api.post(
+    `/pdf/report/${encodeURIComponent(ticker)}`,
+    { ...result, source_filename: sourceFilename || undefined },
+    { params: { lang }, responseType: 'blob', timeout: 60000 },
+  ).then((r) => r.data);
+
+// ─── Watchlist (auth-gated) ───────────────────────────────────────────
+// All three endpoints require the Bearer token (interceptor adds it).
+
+// GET /api/watchlist/  — array of stocks the current user has starred.
+export const fetchWatchlist = () =>
+  api.get('/watchlist/').then((r) => r.data);
+
+// POST /api/watchlist/<ticker>  — star a stock (idempotent).
+export const addToWatchlist = (ticker) =>
+  api.post(`/watchlist/${encodeURIComponent(ticker)}`).then((r) => r.data);
+
+// DELETE /api/watchlist/<ticker>  — unstar a stock (idempotent).
+export const removeFromWatchlist = (ticker) =>
+  api.delete(`/watchlist/${encodeURIComponent(ticker)}`).then((r) => r.data);
+
+// ─── Personal notes (auth-gated) ──────────────────────────────────────
+
+// GET /api/notes/<ticker>  — returns {symbol, content, updated_at}.
+// Content is "" when the user has no note yet.
+export const fetchNote = (ticker) =>
+  api.get(`/notes/${encodeURIComponent(ticker)}`).then((r) => r.data);
+
+// PUT /api/notes/<ticker>  — create or overwrite. Empty content deletes the row.
+export const saveNote = (ticker, content) =>
+  api.put(`/notes/${encodeURIComponent(ticker)}`, { content }).then((r) => r.data);
 
 // ─── News ─────────────────────────────────────────────────────────────
 // Real news comes from Finnhub (called directly from the browser, no

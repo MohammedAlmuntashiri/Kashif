@@ -3,12 +3,13 @@
 
 import React from 'react';
 import { Link, NavLink } from 'react-router-dom';
-import { Home as HomeIcon, BarChart3, Info, LineChart } from 'lucide-react';
+import { Home as HomeIcon, BarChart3, Info, LineChart, Star } from 'lucide-react';
 import SearchBar from './SearchBar.jsx';
 import ThemeToggle from './ThemeToggle.jsx';
 import LanguageToggle from './LanguageToggle.jsx';
 import UserMenu from './UserMenu.jsx';
 import { useLang } from '../../i18n/LanguageContext.jsx';
+import { useAuth } from '../../auth/AuthContext.jsx';
 
 const linkBase     = 'flex items-center gap-1.5 text-sm font-medium transition';
 const linkInactive = 'text-slate-300 hover:text-white';
@@ -19,6 +20,7 @@ const navLinkCls = ({ isActive }) =>
 
 export default function Navbar() {
   const { t } = useLang();
+  const { user } = useAuth();
 
   return (
     <nav className="sticky top-0 z-40 backdrop-blur-xl bg-slate-950/80 text-white border-b border-white/5 shadow-[0_1px_0_0_rgba(255,255,255,0.04)]">
@@ -41,6 +43,12 @@ export default function Navbar() {
           <BarChart3 size={16} strokeWidth={2} />
           {t('nav.compare')}
         </NavLink>
+        {user && (
+          <NavLink to="/watchlist" className={navLinkCls}>
+            <Star size={16} strokeWidth={2} />
+            {t('nav.watchlist')}
+          </NavLink>
+        )}
         <NavLink to="/about" className={navLinkCls}>
           <Info size={16} strokeWidth={2} />
           {t('nav.about')}

@@ -40,6 +40,40 @@ def _fd_to_dict(fd):
     }
 
 
+def _classify_unavailable_reason(stock, latest_fd):
+    """Explain why fair_value couldn't be computed for this stock.
+
+    Returns a short reason code the frontend maps to a translated message,
+    or None if no obvious reason fits (very rare — usually a transient state).
+
+    Priority order matters: a stock can hit multiple criteria, so we report
+    the most informative one first.
+        insolvent       — negative book equity (no honest P/B; usually loss-making too)
+        loss_making     — negative net_income or EPS in the latest period
+        incomplete_data — latest period missing one of EPS / equity / shares
+        no_peers        — only stock in its sector (no sector multiples available)
+    """
+    if latest_fd is None:
+        return "incomplete_data"
+
+    if latest_fd.shareholders_equity is not None and latest_fd.shareholders_equity < 0:
+        return "insolvent"
+
+    if (latest_fd.net_income is not None and latest_fd.net_income < 0) or \
+       (latest_fd.eps is not None and latest_fd.eps < 0):
+        return "loss_making"
+
+    if latest_fd.eps is None or latest_fd.shareholders_equity is None \
+            or latest_fd.shares_outstanding is None:
+        return "incomplete_data"
+
+    peer_count = Stock.query.filter_by(sector_id=stock.sector_id).count()
+    if peer_count <= 1:
+        return "no_peers"
+
+    return None
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /api/stocks/
 # Returns a lightweight list of all stocks — enough for a stock-list page.
@@ -126,6 +160,15 @@ def stock_detail(ticker):
             "calculated_at": latest_val.calculated_at.isoformat() if latest_val.calculated_at else None,
         }
 
+    # If no honest fair value exists, classify why so the frontend can show
+    # a meaningful message ("loss-making", "insolvent", …) instead of a blank.
+    valuation_unavailable_reason = None
+    if valuation is None or valuation.get("fair_value") is None:
+        latest_fd = next(iter(sorted(stock.financial_data,
+                                     key=lambda f: f.period,
+                                     reverse=True)), None)
+        valuation_unavailable_reason = _classify_unavailable_reason(stock, latest_fd)
+
     return jsonify({
         "symbol":      stock.symbol,
         "name_en":     stock.name_en,
@@ -135,6 +178,7 @@ def stock_detail(ticker):
         "market_price": stock.market_price,
         "financials":  financials,        # List of dicts, newest period first
         "valuation":   valuation,         # None if not yet computed
+        "valuation_unavailable_reason": valuation_unavailable_reason,  # null when valuation is healthy
     })
 
 

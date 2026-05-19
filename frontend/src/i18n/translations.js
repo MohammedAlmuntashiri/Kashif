@@ -12,7 +12,41 @@ export const translations = {
     // ── Navbar ─────────────────────────────────────────────
     'nav.home':         'Home',
     'nav.compare':      'Compare',
+    'nav.watchlist':    'Watchlist',
     'nav.about':        'About',
+
+    // ── Watchlist ──────────────────────────────────────────
+    'watchlist.title':         'Your watchlist',
+    'watchlist.count':         '{n} stocks',
+    'watchlist.empty':         'No stocks starred yet',
+    'watchlist.emptyHint':     'Tap the ⭐ on any stock card to add it here.',
+    'watchlist.signinTitle':   'Sign in to use your watchlist',
+    'watchlist.signinBody':    'Star stocks across the app and they’ll show up here, refreshed live alongside their valuations.',
+    'watchlist.signinCta':     'Sign in',
+    'watchlist.addTooltip':    'Add to watchlist',
+    'watchlist.removeTooltip': 'Remove from watchlist',
+    'watchlist.toggleFailed':  'Could not update watchlist',
+
+    // ── Personal notes (per stock) ─────────────────────────
+    'notes.title':       'Your notes',
+    'notes.placeholder': 'Jot down your thesis, target price, or anything else you want to remember about this stock…',
+    'notes.save':        'Save',
+    'notes.saving':      'Saving…',
+    'notes.saved':       'Saved',
+    'notes.saveFailed':  'Could not save note',
+    'notes.lastSaved':   'Last saved',
+
+    // ── Recently viewed (browser-local) ────────────────────
+    'recent.title':      'Recently viewed',
+
+    // ── Pagination on HomePage ─────────────────────────────
+    'home.loadMore':     'Load {n} more',
+    'home.stocksShown':  'Showing {shown} of {total}',
+
+    // ── Peers in same sector (stock detail page) ───────────
+    'peers.title':       'Stocks in {sector}',
+    'peers.count':       '{n} peers',
+    'peers.empty':       'This stock is the only listed name in its sector.',
 
     // ── Search ─────────────────────────────────────────────
     'search.placeholder': 'Search ticker or name',
@@ -61,6 +95,14 @@ export const translations = {
     'val.model.pe':      'P/E',
     'val.model.pb':      'P/B',
 
+    // ── Why a fair value couldn't be computed ─────────────
+    'val.unavailable.title':           'Fair value unavailable',
+    'val.unavailable.loss_making':     'This company is currently loss-making (negative earnings or cash flow), so a fair value cannot be honestly computed. Valuation models like DCF and P/E require positive figures to work.',
+    'val.unavailable.insolvent':       'This company has negative shareholders’ equity, meaning liabilities exceed assets. Standard valuation models cannot produce a meaningful fair value in this state.',
+    'val.unavailable.incomplete_data': 'The latest financial statements are missing key values (EPS, equity, or shares outstanding). A fair value will appear once the next filing is processed.',
+    'val.unavailable.no_peers':        'This company is the only listed stock in its sector, so peer-based valuation methods (P/E, P/B) cannot be calculated.',
+    'val.unavailable.unknown':         'A fair value could not be computed for this stock at this time.',
+
     // ── Gauge ──────────────────────────────────────────────
     'gauge.market':      'Market',
     'gauge.fair':        'Fair',
@@ -103,7 +145,18 @@ export const translations = {
     'up.col.field':        'Field',
     'up.col.dbValue':      'DB value',
     'up.col.extracted':    'Extracted',
+    'up.col.diff':         'Diff',
     'up.col.match':        'Match',
+    'up.summary.match':    '{n} match',
+    'up.summary.mismatch': '{n} mismatch',
+    'up.summary.missing':  '{n} missing',
+    'up.download.csv':     'Download CSV',
+    'up.download.json':    'Download JSON',
+    'up.download.report':       'Download Report (PDF)',
+    'up.download.reportEn':     'Download Report (EN)',
+    'up.download.reportAr':     'Download Report (AR)',
+    'up.download.reportBusy':   'Generating…',
+    'up.download.reportFailed': 'Report generation failed',
 
     // ── Compare page ───────────────────────────────────────
     'cmp.title':           'Comparisons',
@@ -216,7 +269,41 @@ export const translations = {
     // ── Navbar ─────────────────────────────────────────────
     'nav.home':         'الرئيسية',
     'nav.compare':      'المقارنات',
+    'nav.watchlist':    'قائمة المتابعة',
     'nav.about':        'من نحن',
+
+    // ── قائمة المتابعة ─────────────────────────────────────
+    'watchlist.title':         'قائمة المتابعة',
+    'watchlist.count':         '{n} سهم',
+    'watchlist.empty':         'لم تتم إضافة أي سهم بعد',
+    'watchlist.emptyHint':     'اضغط على ⭐ في أي بطاقة سهم لإضافته هنا.',
+    'watchlist.signinTitle':   'سجّل الدخول لاستخدام قائمة المتابعة',
+    'watchlist.signinBody':    'علِّم الأسهم بنجمة في أي مكان في التطبيق وستظهر هنا مع تحديث مباشر لأسعارها وتقييماتها.',
+    'watchlist.signinCta':     'تسجيل الدخول',
+    'watchlist.addTooltip':    'إضافة إلى قائمة المتابعة',
+    'watchlist.removeTooltip': 'إزالة من قائمة المتابعة',
+    'watchlist.toggleFailed':  'تعذّر تحديث قائمة المتابعة',
+
+    // ── الملاحظات الشخصية (لكل سهم) ────────────────────────
+    'notes.title':       'ملاحظاتك',
+    'notes.placeholder': 'سجّل توقعاتك، السعر المستهدف، أو أي شيء تريد تذكره عن هذا السهم…',
+    'notes.save':        'حفظ',
+    'notes.saving':      'جارٍ الحفظ…',
+    'notes.saved':       'تم الحفظ',
+    'notes.saveFailed':  'تعذّر حفظ الملاحظة',
+    'notes.lastSaved':   'آخر حفظ',
+
+    // ── شوهد مؤخراً (في المتصفح) ──────────────────────────
+    'recent.title':      'شوهد مؤخراً',
+
+    // ── الترقيم في الصفحة الرئيسية ────────────────────────
+    'home.loadMore':     'عرض {n} إضافية',
+    'home.stocksShown':  'تعرض {shown} من {total}',
+
+    // ── أسهم في نفس القطاع (صفحة تفاصيل السهم) ────────────
+    'peers.title':       'أسهم في قطاع {sector}',
+    'peers.count':       '{n} سهم',
+    'peers.empty':       'هذا السهم هو الوحيد المدرج في قطاعه.',
 
     // ── Search ─────────────────────────────────────────────
     'search.placeholder': 'ابحث برمز السهم أو الاسم',
@@ -265,6 +352,14 @@ export const translations = {
     'val.model.pe':      'مكرر الربحية',
     'val.model.pb':      'مكرر القيمة الدفترية',
 
+    // ── أسباب عدم توفر القيمة العادلة ──────────────────────
+    'val.unavailable.title':           'القيمة العادلة غير متاحة',
+    'val.unavailable.loss_making':     'هذه الشركة تسجّل خسائر حالياً (أرباح سالبة أو تدفقات نقدية سالبة)، لذا لا يمكن احتساب قيمة عادلة موضوعية. تتطلب نماذج التقييم مثل التدفقات النقدية المخصومة ومكرر الربحية أرقاماً موجبة لتعمل.',
+    'val.unavailable.insolvent':       'لدى هذه الشركة حقوق مساهمين سالبة، أي أن مطلوباتها تتجاوز أصولها. لا يمكن لنماذج التقييم المعتادة إنتاج قيمة عادلة في هذه الحالة.',
+    'val.unavailable.incomplete_data': 'القوائم المالية الأحدث تنقصها قيم أساسية (ربحية السهم أو حقوق المساهمين أو الأسهم القائمة). ستظهر القيمة العادلة عند معالجة الإفصاح القادم.',
+    'val.unavailable.no_peers':        'هذه الشركة هي الوحيدة المدرجة في قطاعها، لذا لا يمكن حساب طرق التقييم المعتمدة على الشركات المماثلة (مكرر الربحية ومكرر القيمة الدفترية).',
+    'val.unavailable.unknown':         'لم يتم احتساب قيمة عادلة لهذا السهم في الوقت الحالي.',
+
     // ── Gauge ──────────────────────────────────────────────
     'gauge.market':      'السوق',
     'gauge.fair':        'العادلة',
@@ -307,7 +402,18 @@ export const translations = {
     'up.col.field':        'الحقل',
     'up.col.dbValue':      'القيمة في القاعدة',
     'up.col.extracted':    'المستخرج',
+    'up.col.diff':         'الفرق',
     'up.col.match':        'التطابق',
+    'up.summary.match':    '{n} مطابقة',
+    'up.summary.mismatch': '{n} اختلاف',
+    'up.summary.missing':  '{n} مفقود',
+    'up.download.csv':     'تنزيل CSV',
+    'up.download.json':    'تنزيل JSON',
+    'up.download.report':       'تنزيل التقرير (PDF)',
+    'up.download.reportEn':     'تنزيل التقرير (EN)',
+    'up.download.reportAr':     'تنزيل التقرير (AR)',
+    'up.download.reportBusy':   'جارٍ التوليد…',
+    'up.download.reportFailed': 'فشل توليد التقرير',
 
     // ── Compare page ───────────────────────────────────────
     'cmp.title':           'المقارنات',

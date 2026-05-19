@@ -54,11 +54,12 @@
 import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, jsonify, request, Response
 from app.extensions import db
 from app.models.stock import Stock
 from app.models.financial_data import FinancialData
 from app.services.pdf_extractor import extract_all
+from app.services.report_service import build_report
 # Accuracy log — every PDF upload appends a row per field so we can track
 # extractor accuracy over time. Imported lazily inside the function in case
 # the accuracy module fails to load (don't break extraction over logging).
@@ -485,3 +486,41 @@ def upload_pdf_batch():
         "dry_run":     dry_run,
         "results":     results,
     })
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# POST /api/pdf/report/<ticker>
+# Build a downloadable PDF extraction report from a dry-run result the
+# frontend already has. Body: JSON with keys "period", "db_comparison",
+# "is_new_row", and optionally "source_filename".
+# ─────────────────────────────────────────────────────────────────────────────
+@pdf_bp.route('/report/<ticker>', methods=['POST'])
+def download_report(ticker):
+    ticker = ticker.strip()
+    payload = request.get_json(silent=True) or {}
+    lang = (request.args.get('lang') or 'en').strip().lower()
+    if lang not in ('en', 'ar'):
+        lang = 'en'
+
+    if "db_comparison" not in payload:
+        return jsonify({"error": "request body must include db_comparison from a /api/pdf/upload response"}), 400
+
+    try:
+        pdf_bytes = build_report(
+            ticker=ticker,
+            result=payload,
+            source_filename=payload.get("source_filename"),
+            lang=lang,
+        )
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 404
+    except Exception as e:
+        return jsonify({"error": f"{type(e).__name__}: {e}"}), 500
+
+    period = (payload.get("period") or "extract").replace(" ", "_")
+    filename = f"kashif_{ticker}_{period}_{lang}.pdf"
+    return Response(
+        pdf_bytes,
+        mimetype="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

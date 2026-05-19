@@ -2,7 +2,7 @@
 // historical price endpoint, the series is a deterministic random walk
 // seeded from the ticker so the same stock always shows the same line.
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Area, AreaChart, ResponsiveContainer } from 'recharts';
 
 // Mulberry32 — fast, tiny seeded PRNG. We hash the ticker into a 32-bit
@@ -55,27 +55,55 @@ export default function Sparkline({ ticker, anchor, height = 44 }) {
   const stroke = up ? '#10b981' : '#f43f5e';
   const fillId = `spark-${ticker}-${up ? 'up' : 'dn'}`;
 
+  // Defer mounting the recharts SVG until the placeholder scrolls into view.
+  // 49 stock cards × an off-screen recharts tree was the main jank source on
+  // the HomePage. Once visible, the chart stays mounted forever.
+  const ref = useRef(null);
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (visible) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      setVisible(true);
+      return;
+    }
+    const node = ref.current;
+    if (!node) return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          setVisible(true);
+          io.disconnect();
+        }
+      },
+      { rootMargin: '200px 0px' },  // start rendering just before it scrolls in
+    );
+    io.observe(node);
+    return () => io.disconnect();
+  }, [visible]);
+
   return (
-    <div style={{ width: '100%', height }} aria-hidden>
-      <ResponsiveContainer>
-        <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
-          <defs>
-            <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%"   stopColor={stroke} stopOpacity={0.35} />
-              <stop offset="100%" stopColor={stroke} stopOpacity={0} />
-            </linearGradient>
-          </defs>
-          <Area
-            type="monotone"
-            dataKey="v"
-            stroke={stroke}
-            strokeWidth={1.75}
-            fill={`url(#${fillId})`}
-            isAnimationActive={false}
-            dot={false}
-          />
-        </AreaChart>
-      </ResponsiveContainer>
+    <div ref={ref} style={{ width: '100%', height }} aria-hidden>
+      {visible && (
+        <ResponsiveContainer>
+          <AreaChart data={data} margin={{ top: 2, right: 0, bottom: 0, left: 0 }}>
+            <defs>
+              <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%"   stopColor={stroke} stopOpacity={0.35} />
+                <stop offset="100%" stopColor={stroke} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <Area
+              type="monotone"
+              dataKey="v"
+              stroke={stroke}
+              strokeWidth={1.75}
+              fill={`url(#${fillId})`}
+              isAnimationActive={false}
+              dot={false}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      )}
     </div>
   );
 }

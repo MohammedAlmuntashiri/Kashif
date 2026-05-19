@@ -19,6 +19,7 @@ import ComparePage from './pages/ComparePage.jsx';
 import SignInPage from './pages/SignInPage.jsx';
 import SignUpPage from './pages/SignUpPage.jsx';
 import AboutPage from './pages/AboutPage.jsx';
+import WatchlistPage from './pages/WatchlistPage.jsx';
 
 export default function App() {
   return (
@@ -58,6 +59,7 @@ function AnimatedRoutes() {
         <Route path="/stock/:ticker"  element={<PageTransition><StockDetailPage /></PageTransition>} />
         <Route path="/sector/:name"   element={<PageTransition><SectorPage /></PageTransition>} />
         <Route path="/compare"        element={<PageTransition><ComparePage /></PageTransition>} />
+        <Route path="/watchlist"      element={<PageTransition><WatchlistPage /></PageTransition>} />
         <Route path="/signin"         element={<PageTransition><SignInPage /></PageTransition>} />
         <Route path="/signup"         element={<PageTransition><SignUpPage /></PageTransition>} />
         <Route path="/about"          element={<PageTransition><AboutPage /></PageTransition>} />

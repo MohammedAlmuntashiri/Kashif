@@ -48,3 +48,7 @@ next_session_brief.txt
 
 # One-off DB dumps for sharing with collaborators (do not commit)
 backend/kashif_db_dump.sql
+
+# Runtime-appended per-field extractor log — grows on every PDF upload,
+# noisy in diffs. Re-created automatically by /api/pdf/upload.
+backend/accuracy_log.csv

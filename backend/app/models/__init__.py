@@ -6,3 +6,5 @@ from .financial_data import FinancialData
 from .valuation import Valuation
 from .comparison import Comparison
 from .user import User
+from .watchlist import Watchlist
+from .stock_note import StockNote
