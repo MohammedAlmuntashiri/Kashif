@@ -45,7 +45,6 @@ export function usePolling(fetcher, intervalMs, deps = []) {
       cancelled = true;
       clearInterval(id);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [...deps, intervalMs]);
 
   return { data, error };

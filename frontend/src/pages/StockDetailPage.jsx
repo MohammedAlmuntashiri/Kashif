@@ -11,6 +11,7 @@ import ValuationGauge from '../components/stocks/ValuationGauge.jsx';
 import StockNoteCard from '../components/stocks/StockNoteCard.jsx';
 import WatchlistStar from '../components/stocks/WatchlistStar.jsx';
 import { recordRecentlyViewed } from '../components/stocks/RecentlyViewedStrip.jsx';
+import { getMarketStatus, formatTimeAgo } from '../utils/market.js';
 import FinancialTable from '../components/stocks/FinancialTable.jsx';
 import UploadSection from '../components/stocks/UploadSection.jsx';
 import PeersInSector from '../components/stocks/PeersInSector.jsx';
@@ -158,14 +159,39 @@ export default function StockDetailPage() {
               ))}
             </div>
 
-            {valuation.calculated_at && (
-              <div className="text-xs text-slate-400 dark:text-slate-500 mt-4">
-                {t('val.calculated')}: {new Date(valuation.calculated_at).toLocaleString()}
-                {valuation.source && (
-                  <> &nbsp;•&nbsp; {t('val.source')}: {valuation.source}</>
-                )}
-              </div>
-            )}
+            {valuation.calculated_at && (() => {
+              // Show relative time ("3 hr ago") plus a small market-status
+              // badge so the user understands WHY the timestamp is stale.
+              // Both computed client-side so we don't have to ping the backend
+              // just to know the time.
+              const ago = formatTimeAgo(valuation.calculated_at);
+              const m = getMarketStatus();
+              const isOpen = m.status === 'open';
+              const dot = (
+                <span className={`inline-block w-1.5 h-1.5 rounded-full ${
+                  isOpen ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
+                }`} />
+              );
+              return (
+                <div className="text-xs text-slate-500 dark:text-slate-400 mt-4 flex items-center gap-2 flex-wrap">
+                  {dot}
+                  <span>
+                    {t('val.calculated')}:{' '}
+                    <span className="font-medium text-slate-700 dark:text-slate-300">
+                      {ago ? t(ago.key, ago.args) : '—'}
+                    </span>
+                  </span>
+                  <span className="text-slate-300 dark:text-slate-600">·</span>
+                  <span>{t(`market.${m.status}`, m.nextOpenDay ? { when: t(`market.when.${m.nextOpenDay}`) } : {})}</span>
+                  {valuation.source && (
+                    <>
+                      <span className="text-slate-300 dark:text-slate-600">·</span>
+                      <span>{t('val.source')}: {valuation.source}</span>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
           </>
         ) : (
           <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-lg p-4">

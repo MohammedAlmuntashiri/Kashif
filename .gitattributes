@@ -1,0 +1,9 @@
+# Force LF line endings for files that run inside Linux containers,
+# regardless of the OS the developer cloned the repo on. Without this,
+# Git's autocrlf setting silently converts these to CRLF on Windows,
+# which breaks shebang parsing in Docker (the kernel can't find
+# "/bin/bash\r"). Symptom: "exec ./entrypoint.sh: no such file or directory".
+
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+*.dockerfile text eol=lf

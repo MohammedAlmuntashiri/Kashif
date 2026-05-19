@@ -48,6 +48,19 @@ export const translations = {
     'peers.count':       '{n} peers',
     'peers.empty':       'This stock is the only listed name in its sector.',
 
+    // ── Relative time + market status (stock detail page) ──
+    'time.justNow':      'just now',
+    'time.minAgo':       '{n} min ago',
+    'time.hrAgo':        '{n} hr ago',
+    'time.dayAgo':       '{n} days ago',
+    'market.open':           'Market open — auto-refreshes every 10 min',
+    'market.pre_open':       'Market opens {when} at 10:00 Riyadh time',
+    'market.closed_today':   'Market closed — reopens {when} at 10:00 Riyadh time',
+    'market.closed_weekend': 'Market closed for the weekend — reopens {when} at 10:00 Riyadh time',
+    'market.when.today':     'today',
+    'market.when.tomorrow':  'tomorrow',
+    'market.when.sunday':    'Sunday',
+
     // ── Search ─────────────────────────────────────────────
     'search.placeholder': 'Search ticker or name',
     'search.go':          'Go',
@@ -304,6 +317,19 @@ export const translations = {
     'peers.title':       'أسهم في قطاع {sector}',
     'peers.count':       '{n} سهم',
     'peers.empty':       'هذا السهم هو الوحيد المدرج في قطاعه.',
+
+    // ── الوقت النسبي + حالة السوق (صفحة تفاصيل السهم) ─────
+    'time.justNow':      'الآن',
+    'time.minAgo':       'قبل {n} دقيقة',
+    'time.hrAgo':        'قبل {n} ساعة',
+    'time.dayAgo':       'قبل {n} يوم',
+    'market.open':           'السوق مفتوح — يُحدّث تلقائياً كل 10 دقائق',
+    'market.pre_open':       'يفتح السوق {when} الساعة 10:00 بتوقيت الرياض',
+    'market.closed_today':   'السوق مغلق — يفتح {when} الساعة 10:00 بتوقيت الرياض',
+    'market.closed_weekend': 'السوق مغلق لعطلة نهاية الأسبوع — يفتح {when} الساعة 10:00 بتوقيت الرياض',
+    'market.when.today':     'اليوم',
+    'market.when.tomorrow':  'غداً',
+    'market.when.sunday':    'الأحد',
 
     // ── Search ─────────────────────────────────────────────
     'search.placeholder': 'ابحث برمز السهم أو الاسم',
