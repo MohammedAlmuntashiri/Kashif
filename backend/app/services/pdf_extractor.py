@@ -45,34 +45,13 @@ TEXT_THRESHOLD_CHARS = 50
 OCR_DPI = 200
 
 # tesseract languages: English + Arabic. The "+" tells Tesseract to load both.
-OCR_LANGS = "eng+ara"
+OCR_LANGS = "eng"
 
 
 # ── Keyword lists per value (English + Arabic) ──────────────────
 # Each list is searched in order; first hit wins. Add variations as we
 # encounter them in real PDFs. Match is case-insensitive.
 #
-# Arabic note: pdfplumber returns Arabic text in *visual* (RTL-reversed)
-# order, while Tesseract OCR returns it in *logical* order. The keywords
-# below are written in logical order; _expand_arabic() generates a
-# character-reversed twin for each so we match either source.
-ARABIC_RANGE = ("؀", "ۿ")  # Arabic Unicode block
-
-
-def _is_arabic(s):
-    return any(ARABIC_RANGE[0] <= c <= ARABIC_RANGE[1] for c in s)
-
-
-def _expand_arabic(keywords):
-    """Return original list plus a character-reversed copy of each Arabic
-    entry (for matching against pdfplumber's visual-order extraction)."""
-    out = list(keywords)
-    for kw in keywords:
-        if _is_arabic(kw):
-            rev = kw[::-1]
-            if rev not in out:
-                out.append(rev)
-    return out
 
 
 KEYWORDS = {
@@ -90,7 +69,6 @@ KEYWORDS = {
         # "Revenue" matches "Other revenue 90,386" (pos=6, anchor-allowed)
         # and never reaches the real insurance line.
         "Insurance revenue", "Net earned premiums", "Gross written premiums",
-        "إيرادات التأمين", "صافي الأقساط المكتسبة", "إجمالي الأقساط المكتتبة",
         # Banks (no "revenue" line — total operating income is the analog).
         # "Net operating income" is AFTER credit-loss provisions and is what
         # Tadawul/Argaam report as the official bank revenue figure. It must
@@ -98,12 +76,8 @@ KEYWORDS = {
         # subtotal — ~2B higher for Al Rajhi and SNB in 2024). If we matched
         # "Total operating income" first we'd overstate bank revenue.
         "Net operating income", "Total operating income", "Net financing income",
-        "إجمالي الدخل التشغيلي", "صافي الدخل التشغيلي", "صافي دخل العمليات",
-        "صافي دخل التمويل", "الدخل التشغيلي",
         # Industrial / consumer / telecom / energy (generic — match last).
         "Total revenue", "Revenue", "Revenues", "Net sales", "Total sales",
-        "إجمالي الإيرادات", "الإيرادات", "إيرادات", "الايرادات", "ايرادات",
-        "صافي المبيعات", "المبيعات",
     ],
     # net_income is split into attribution + total constants below the
     # KEYWORDS dict (extract_net_income runs them in stages). Leaving an
@@ -115,7 +89,7 @@ KEYWORDS = {
     # numeric range and skips unit detection.
     "eps": [],
     "total_assets": [
-        "Total assets", "إجمالي الأصول", "إجمالي الموجودات", "مجموع الموجودات",
+        "Total assets",
     ],
     # shareholders_equity uses SHAREHOLDERS_EQUITY_ATTRIBUTION_KEYWORDS +
     # SHAREHOLDERS_EQUITY_DISQUALIFIERS module constants (extract_shareholders_
@@ -124,7 +98,6 @@ KEYWORDS = {
     "shareholders_equity": [],
     "total_borrowings": [
         "Total borrowings", "Total debt", "Long-term debt", "Borrowings",
-        "إجمالي القروض", "مجموع القروض", "القروض",
     ],
     "cash_and_equivalents": [
         # Standard single-line (non-bank issuers). Bank-specific keywords
@@ -133,11 +106,9 @@ KEYWORDS = {
         # single-value lookup.
         "Cash and cash equivalents", "Cash and equivalents",
         # Arabic
-        "النقد وما يماثله", "النقد ومعادلاته", "النقد ومايعادله",
     ],
     "free_cash_flow": [
         "Free cash flow", "FCF",
-        "التدفق النقدي الحر", "التدفقات النقدية الحرة",
     ],
     "shares_outstanding": [
         "Shares outstanding", "Number of shares", "Issued shares",
@@ -146,7 +117,6 @@ KEYWORDS = {
         # generic "Weighted average number of shares" substring match.
         "Weighted average number of outstanding shares",
         "Weighted average number of shares",
-        "عدد الأسهم", "الأسهم المصدرة", "المتوسط المرجح لعدد الأسهم",
     ],
     "dividends_per_share": [
         # Specific totals first so they win over quarterly-tranche labels
@@ -157,14 +127,11 @@ KEYWORDS = {
         "Dividends per share",
         "Dividend per share",
         "DPS",
-        "توزيعات الأرباح للسهم", "توزيعات أرباح السهم",
-        "توزيع الأرباح للسهم",
     ],
 }
 
 # Auto-add reversed-form Arabic variants so we match either pdfplumber's
 # visual-order extraction or Tesseract's logical-order output.
-KEYWORDS = {k: _expand_arabic(v) for k, v in KEYWORDS.items()}
 
 
 # ── Net income: attribution vs consolidated total ───────────────
@@ -181,7 +148,7 @@ KEYWORDS = {k: _expand_arabic(v) for k, v in KEYWORDS.items()}
 # Company". STC + SABIC's 2024 statements show *two* attribution lines
 # (continuing-ops attribution first, total attribution second), so the
 # matcher uses last-match semantics for these keywords.
-NET_INCOME_ATTRIBUTION_KEYWORDS = _expand_arabic([
+NET_INCOME_ATTRIBUTION_KEYWORDS = [
     "Net income attributable to equity holders of the parent",
     "Net income attributable to shareholders of the parent",
     "Net profit attributable to equity holders of the parent",
@@ -215,16 +182,8 @@ NET_INCOME_ATTRIBUTION_KEYWORDS = _expand_arabic([
     "Shareholders of the Bank",
     "Shareholders of the Company",
     # Arabic
-    "العائد إلى مساهمي الشركة الأم",
-    "العائد لمساهمي الشركة الأم",
-    "العائد لمساهمي البنك",
-    "صافي الدخل العائد إلى مساهمي الشركة الأم",
-    "صافي الربح العائد إلى مساهمي الشركة الأم",
-    "حصة مساهمي الشركة الأم",
-    "حصة مساهمي البنك",
-    "مساهمي الشركة الأم",
-])
-NET_INCOME_TOTAL_KEYWORDS = _expand_arabic([
+]
+NET_INCOME_TOTAL_KEYWORDS = [
     # Insurance bottom line — Bupa 2024 splits the label across two lines:
     #   "NET INCOME ATTRIBUTED TO THE SHAREHOLDERS"
     #   "AFTER ZAKAT AND INCOME TAX 1,166,002 940,163"
@@ -234,14 +193,12 @@ NET_INCOME_TOTAL_KEYWORDS = _expand_arabic([
     # before generic "Net income" — that keyword would otherwise match a
     # random in-document mention with a small unrelated number on the same line.
     "After zakat and income tax",
-    "بعد الزكاة وضريبة الدخل",
     # Alinma 2022: full-line label is "Net income for the year after zakat".
     # Listed before generic "Net income" so the longer-specific phrase wins
     # when both could substring-match the same line.
     "Net income for the year after zakat",
     "Profit for the year", "Net profit", "Net income", "Net earnings",
-    "صافي الدخل", "صافي الربح", "ربح السنة", "ربح العام",
-])
+]
 # Lines mentioning these qualifiers are NOT the consolidated total —
 # Al Rajhi's "Net income for the year before Zakat" is 21.97B vs the
 # real 19.73B post-zakat figure on the next line.
@@ -251,8 +208,6 @@ NET_INCOME_TOTAL_DISQUALIFIERS = [
     # which strict \s+ would miss.
     re.compile(r"before[\W_]*zakat", re.I),
     re.compile(r"before[\W_]*(?:income[\W_]*)?tax", re.I),
-    re.compile(r"قبل\s+الزكاة"),
-    re.compile(r"قبل\s+الضريبة"),
 ]
 
 
@@ -264,7 +219,7 @@ NET_INCOME_TOTAL_DISQUALIFIERS = [
 # then a "Total equity" line below that includes minority interests.
 # The parent-attributable phrasing varies by issuer: "of the Parent"
 # (most), "of the Bank" (banks), "of the Company" (some).
-SHAREHOLDERS_EQUITY_ATTRIBUTION_KEYWORDS = _expand_arabic([
+SHAREHOLDERS_EQUITY_ATTRIBUTION_KEYWORDS = [
     "Equity attributable to equity holders of the Parent Company",
     "Equity attributable to the equity holders of the Parent Company",
     "Equity attributable to equity holders of the parent",
@@ -279,18 +234,13 @@ SHAREHOLDERS_EQUITY_ATTRIBUTION_KEYWORDS = _expand_arabic([
     "Equity attributable to equity holders",
     "Equity attributable to shareholders",
     # Arabic
-    "حقوق الملكية العائدة لمساهمي الشركة الأم",
-    "حقوق المساهمين العائدة لمساهمي الشركة الأم",
-    "حقوق الملكية العائدة لمساهمي البنك",
-    "حقوق المساهمين العائدة للشركة الأم",
-])
-SHAREHOLDERS_EQUITY_TOTAL_KEYWORDS = _expand_arabic([
+]
+SHAREHOLDERS_EQUITY_TOTAL_KEYWORDS = [
     "Total shareholders' equity", "Total shareholders equity",
     "Net shareholders' equity",
     "Shareholders' equity", "Shareholders equity",
     "Total equity",
-    "إجمالي حقوق المساهمين", "حقوق المساهمين", "إجمالي حقوق الملكية",
-])
+]
 # Lines that look like the equity total but aren't — "Total equity and
 # liabilities" (= total_assets), "Total equity and net debt" (Aramco's
 # gearing-ratio explainer). Without these, the substring-match
@@ -300,7 +250,6 @@ SHAREHOLDERS_EQUITY_DISQUALIFIERS = [
     re.compile(r"equity\s+and\s+liabilit", re.I),
     re.compile(r"equity\s+and\s+net\s+debt", re.I),
     re.compile(r"liabilities\s+and\s+(?:shareholders|equity)", re.I),
-    re.compile(r"حقوق\s+الملكية\s+و\s*الالتزامات"),
 ]
 # Aramco's BS uses unlabeled subtotal rows: after the equity component
 # rows (Share capital, Reserves, …) the parent-attributable subtotal sits
@@ -328,7 +277,7 @@ SHAREHOLDERS_EQUITY_HEADER_RX = re.compile(
 #      Adding "Net income" to EPS_KEYWORDS would normally collide with
 #      the income line; max_abs=10_000 filters out the multi-million
 #      currency value while leaving the genuine 0.51 EPS in scope.
-EPS_KEYWORDS = _expand_arabic([
+EPS_KEYWORDS = [
     # Singular "earning" first — Al Rajhi's notes section uses singular
     # ("Basic and diluted earning per share (in SAR) 4.67 3.95"), while
     # page 10's income statement says plural ("...earnings per share...
@@ -360,22 +309,12 @@ EPS_KEYWORDS = _expand_arabic([
     # that get filtered out before this keyword has a chance to claim them.
     "attributable to equity holders of the parent",
     # Arabic
-    "ربحية السهم الأساسية",
-    "ربحية السهم المخففة",
-    "ربحية السهم",
-    "العائد على السهم",
-    "أساسي",
-    "مخفف",
-])
+]
 EPS_DISQUALIFIERS = [
     re.compile(r"continuing\s+operations", re.I),
     re.compile(r"discontinued\s+operations", re.I),
     re.compile(r"before\s+zakat", re.I),
     re.compile(r"before\s+(?:income\s+)?tax", re.I),
-    re.compile(r"العمليات\s+المستمرة"),
-    re.compile(r"العمليات\s+المتوقفة"),
-    re.compile(r"قبل\s+الزكاة"),
-    re.compile(r"قبل\s+الضريبة"),
 ]
 
 
@@ -473,7 +412,7 @@ DPS_PROSE_DISQUALIFIERS = [
 # where the dividend note states only an aggregate dividend (no per-share),
 # typical of REITs (Jarir 4190, AlAhli REIT 4338) and some banks where the
 # per-share figure is buried in narrative the Stage-3 regexes don't capture.
-DIVIDENDS_PAID_KEYWORDS = _expand_arabic([
+DIVIDENDS_PAID_KEYWORDS = [
     # Most specific multi-word phrases first (substring match — longer wins).
     "Dividends announced and paid",
     "Dividends paid to shareholders",
@@ -487,9 +426,7 @@ DIVIDENDS_PAID_KEYWORDS = _expand_arabic([
     # Generic last — order matters because match is substring-based.
     "Dividends paid",
     "Dividend paid",
-    "توزيعات أرباح مدفوعة",
-    "أرباح مدفوعة للمساهمين",
-])
+]
 
 # Reject lines that mention "dividends" but are not cash outflows to ordinary
 # equity holders: NCI/minority distributions, dividends received (inflow),
@@ -543,7 +480,7 @@ _DPS_SENT_SPLIT_RX = re.compile(r"(?<=[.!?])\s+")
 # the full count (4,176,000,000) even on a SAR'000 page — the raw value is
 # already in shares. extract_shares_outstanding validates the scaled result
 # and falls back to the unscaled value when scaling produces an implausible count.
-SHARES_OUTSTANDING_KEYWORDS = _expand_arabic([
+SHARES_OUTSTANDING_KEYWORDS = [
     # EPS-note phrasing — most specific, typically on IS / notes pages
     "Weighted average number of shares outstanding",
     "Weighted average number of ordinary shares outstanding",
@@ -572,18 +509,7 @@ SHARES_OUTSTANDING_KEYWORDS = _expand_arabic([
     "Issued ordinary shares",
     "Issued shares",
     # Arabic
-    "المتوسط المرجح لعدد الأسهم العادية القائمة",
-    "المتوسط المرجح لعدد الأسهم العادية",
-    "المتوسط المرجح لعدد الأسهم",
-    "عدد الأسهم العادية القائمة",
-    "عدد الأسهم العادية الصادرة والقائمة",
-    "عدد الأسهم العادية المصدرة",
-    "عدد الأسهم العادية",
-    "عدد الأسهم القائمة",
-    "عدد الأسهم المصدرة",
-    "عدد الأسهم",
-    "الأسهم المصدرة",
-])
+]
 # Inline unit qualifier embedded in a share-count label (e.g. Aramco's
 # "Weighted average number of ordinary shares (in millions) ... 241,894").
 # The page-level SAR unit (thousands/millions) applies to monetary values;
@@ -649,23 +575,21 @@ _SHARES_DISQ_NO_PER_SHARE = [
 #     to banks, and AT1 hybrid capital (Equity Sukuk, Tier 1 Sukuk).
 #   Insurance (Bupa) — typically only a lease liability; the lease
 #     keywords cover this without anything else needed.
-BORROWINGS_TOTAL_KEYWORDS = _expand_arabic([
+BORROWINGS_TOTAL_KEYWORDS = [
     # Aramco prints this on a capital-structure / gearing notes page,
     # giving us a single-line total. Stage 1 prefers it over summation.
     "Total borrowings (current and non-current)",
     "Total borrowings",
     "Total debt",
     "Total loans and borrowings",
-    "إجمالي القروض",
-    "إجمالي الديون",
-])
+]
 # Component keywords identify a BS row as part of total_borrowings.
 # More-specific phrases (e.g. "Long-term borrowings") come first so
 # substring matching anchors there before the generic "Borrowings"
 # fallback at the bottom; the line-deduplication in
 # _sum_components_in_pages prevents the same row from being counted
 # twice when multiple keywords would match it.
-BORROWINGS_COMPONENT_KEYWORDS = _expand_arabic([
+BORROWINGS_COMPONENT_KEYWORDS = [
     # Bank-specific instruments (Al Rajhi, SNB)
     "Debt securities issued and term loans",
     "Sukuk Issued",
@@ -753,9 +677,8 @@ BORROWINGS_COMPONENT_KEYWORDS = _expand_arabic([
     "Borrowings",
     "Debt",
     # Arabic
-    "القروض", "الديون",
-])
-LEASE_COMPONENT_KEYWORDS = _expand_arabic([
+]
+LEASE_COMPONENT_KEYWORDS = [
     "Current portion of lease liabilities",
     "Current lease liabilities",
     "Long-term lease liabilities", "Long term lease liabilities",
@@ -764,9 +687,7 @@ LEASE_COMPONENT_KEYWORDS = _expand_arabic([
     "Lease liabilities",
     "Lease liability",
     # Arabic
-    "التزامات عقود الإيجار",
-    "التزامات الإيجار",
-])
+]
 # Lines mentioning these are NOT borrowings even when they look like it.
 # Customer deposits and "Due to banks" are core bank funding sources
 # (yfinance treats neither as debt). Equity Sukuk / Tier 1 Sukuk are
@@ -831,18 +752,14 @@ CASH_DISQUALIFIERS = [
 #   1. "Cash and balances with Central Banks"  (overnight + statutory reserves)
 #   2. "Due from banks and other financial institutions"  (interbank placements)
 # We sum both to match the conventional aggregation.
-CASH_BANK_KEYWORDS = _expand_arabic([
+CASH_BANK_KEYWORDS = [
     "Cash and balances with Central Banks",
     "Cash and balances with central banks",
-    "النقد والأرصدة لدى البنك المركزي",
-    "النقد والأرصدة لدى البنوك المركزية",
-])
-CASH_DUE_FROM_BANKS_KEYWORDS = _expand_arabic([
+]
+CASH_DUE_FROM_BANKS_KEYWORDS = [
     "Due from banks and other financial institutions",
     "Due from banks",
-    "أرصدة لدى البنوك",
-    "مستحق من البنوك",
-])
+]
 
 # Stage-3 fallback: the Statement of Cash Flows closing balance is the
 # IAS-7 authoritative figure for "Cash and cash equivalents". Used when
@@ -851,16 +768,14 @@ CASH_DUE_FROM_BANKS_KEYWORDS = _expand_arabic([
 # (Alinma 2024: "Cash and balances with Saudi Central Bank (SAMA)" — extra
 # "Saudi" word, singular "Bank", parenthetical (SAMA) — fails to match
 # "Cash and balances with Central Banks").
-CASH_CF_CLOSING_KEYWORDS = _expand_arabic([
+CASH_CF_CLOSING_KEYWORDS = [
     "Cash and cash equivalents at end of the year",
     "Cash and cash equivalents at the end of the year",
     "Cash and cash equivalents at end of year",
     "Cash and cash equivalents at end of the period",
     "Cash and cash equivalents at the end of the period",
     "Cash and cash equivalents at end of period",
-    "النقد وما يماثله في نهاية السنة",
-    "النقد وما يماثله في نهاية الفترة",
-])
+]
 
 
 # ── Free cash flow: OCF subtotal + capex keywords ───────────────
@@ -874,7 +789,7 @@ CASH_CF_CLOSING_KEYWORDS = _expand_arabic([
 #   Bupa:    "Net cash generated from operating activities"
 #   Banks:   "Net cash from/(used in) operating activities"
 #   Arabic:  "صافي التدفقات النقدية من الأنشطة التشغيلية"
-OCF_KEYWORDS = _expand_arabic([
+OCF_KEYWORDS = [
     "Net cash provided by operating activities",
     "Net cash generated from operating activities",
     "Net cash generated by operating activities",
@@ -919,12 +834,7 @@ OCF_KEYWORDS = _expand_arabic([
     # subsidiary). Picking that up returns the wrong source. Until OCR
     # cleanup lands for image-only CF pages, Bahri stays null.
     # Arabic
-    "صافي التدفق النقدي من الأنشطة التشغيلية",
-    "صافي النقد المتولد من الأنشطة التشغيلية",
-    "صافي التدفقات النقدية من الأنشطة التشغيلية",
-    "صافي النقد من الأنشطة التشغيلية",
-    "صافي النقد المستخدم في الأنشطة التشغيلية",
-])
+]
 # Lines that match OCF_KEYWORDS but are NOT the CF-statement subtotal.
 # The opening/closing cash balance lines on the CF statement carry large
 # numbers and sometimes appear near the word "activities" in OCR output.
@@ -942,7 +852,7 @@ OCF_DISQUALIFIERS = [
 #   Almarai: "Additions to Property, Plant and Equipment"
 #   Bupa:    "Additions to fixtures, furniture and equipment" (insurance)
 #   Generic: "Acquisition / Investment in property, plant and equipment"
-CAPEX_KEYWORDS = _expand_arabic([
+CAPEX_KEYWORDS = [
     # Most specific first — prevents short fallbacks matching partial phrases
     "Capital expenditures",
     "Capital expenditure",
@@ -1016,12 +926,7 @@ CAPEX_KEYWORDS = _expand_arabic([
     "Purchase of fixed assets",
     "Acquisition of fixed assets",
     # Arabic
-    "شراء الممتلكات والمعدات",
-    "إضافات الممتلكات والمعدات",
-    "النفقات الرأسمالية",
-    "مصروفات رأسمالية",
-    "اقتناء الممتلكات والمعدات",
-])
+]
 # Lines that look like capex but are NOT capital spending.
 # Proceeds/disposal lines appear in the same investing section and often
 # contain the same PPE phrasing. ROU asset additions (IFRS 16) and
@@ -1113,8 +1018,6 @@ UNIT_PATTERNS = [
     (re.compile(r"\(\s*in\s+millions?\s*\)", re.I), 1_000_000),
     (re.compile(r"\(\s*in\s+thousands?\s*\)", re.I), 1_000),
     # Arabic: standalone unit words are typically declarative on a header line
-    (re.compile(r"بالملايين|ملايين\s+الريالات|ملايين\s+ريال"), 1_000_000),
-    (re.compile(r"بالآلاف|آلاف\s+الريالات|آلاف\s+ريال"), 1_000),
 ]
 
 
@@ -1333,14 +1236,7 @@ _HEADER_PATTERN_STRINGS = [
     r"statement\s+of\s+income",
     r"income\s+statement",
     r"statement\s+of\s+comprehensive\s+income",
-    "قائمة الدخل",
-    "قائمة الأرباح والخسائر",
-    "قائمة الربح أو الخسارة",
-    "قائمة الربح والخسارة",
-    "قائمة الدخل الشامل",
-    "قائمة الدخل الموحدة",
 ]
-_HEADER_PATTERN_STRINGS = _expand_arabic(_HEADER_PATTERN_STRINGS)
 INCOME_STATEMENT_PATTERNS = [re.compile(p, re.I) for p in _HEADER_PATTERN_STRINGS]
 
 
@@ -1356,11 +1252,7 @@ _CF_HEADER_PATTERN_STRINGS = [
     r"statements?\s+of\s+cash\s+flows?",
     r"consolidated\s+statement.*cash\s+flow",
     r"cash\s+flows?\s+from\s+operating\s+activit",
-    "قائمة التدفقات النقدية",
-    "قائمة التدفقات النقدية الموحدة",
-    "التدفقات النقدية من الأنشطة التشغيلية",
 ]
-_CF_HEADER_PATTERN_STRINGS = _expand_arabic(_CF_HEADER_PATTERN_STRINGS)
 CASH_FLOW_STATEMENT_PATTERNS = [re.compile(p, re.I) for p in _CF_HEADER_PATTERN_STRINGS]
 
 
@@ -1373,12 +1265,7 @@ CASH_FLOW_STATEMENT_PATTERNS = [re.compile(p, re.I) for p in _CF_HEADER_PATTERN_
 _BS_HEADER_PATTERN_STRINGS = [
     r"statement\s+of\s+financial\s+position",
     r"balance\s+sheet",
-    "قائمة المركز المالي",
-    "قائمة المركز المالي الموحدة",
-    "الميزانية العمومية",
-    "الميزانية",
 ]
-_BS_HEADER_PATTERN_STRINGS = _expand_arabic(_BS_HEADER_PATTERN_STRINGS)
 BALANCE_SHEET_PATTERNS = [re.compile(p, re.I) for p in _BS_HEADER_PATTERN_STRINGS]
 
 # Used by extract_total_borrowings to identify the *actual* BS page
@@ -1386,7 +1273,7 @@ BALANCE_SHEET_PATTERNS = [re.compile(p, re.I) for p in _BS_HEADER_PATTERN_STRING
 # BS_HEADER but are really maturity / liquidity-risk tables (STC's
 # note 27, SNB's note 26). Without this filter, those notes pages
 # add 4-8 extra rows of borrowings and inflate the total ~3x.
-TOTAL_ASSETS_RX = re.compile(r"total\s+assets|إجمالي\s+الأصول|إجمالي\s+الموجودات",
+TOTAL_ASSETS_RX = re.compile(r"total\s+assets",
                              re.I)
 
 # Auditor's-report pages mention "statement of financial position" and
@@ -1564,7 +1451,7 @@ def _extract_in_pages(pages_subset, keywords, *,
 # numeric/punctuation rows. These are the unlabeled subtotals Aramco
 # uses on its BS where the parent-attributable equity is just numbers
 # without a row label.
-_HAS_LETTERS_RX = re.compile(r"[A-Za-z؀-ۿ]")
+_HAS_LETTERS_RX = re.compile(r"[A-Za-z]")
 _NUMERIC_ONLY_RX = re.compile(r"^[\d,.()\s\-]+$")
 
 

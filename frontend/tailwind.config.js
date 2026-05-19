@@ -12,9 +12,14 @@ module.exports = {
     extend: {
       // Two font stacks — `font-sans` is the default body face, `font-display`
       // is for page titles, hero headlines, brand mark, and ticker symbols.
+      //
+      // Tajawal sits in both stacks as a fallback. It only has Arabic glyphs,
+      // so the browser's per-character font matching uses Inter / Space Grotesk
+      // for Latin and falls through to Tajawal for Arabic text — without us
+      // needing to swap fonts manually based on `lang`.
       fontFamily: {
-        sans:    ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
-        display: ['"Space Grotesk"', 'Inter', 'system-ui', 'sans-serif'],
+        sans:    ['Inter', 'Tajawal', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+        display: ['"Space Grotesk"', 'Tajawal', 'Inter', 'system-ui', 'sans-serif'],
       },
 
       // Brand color tokens — emerald primary, mapped so we can reference

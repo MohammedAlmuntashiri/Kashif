@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr-eng \
     tesseract-ocr-ara \
     poppler-utils \
+    fonts-noto-core \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy requirements first (Docker caches this layer — re-installs only if requirements change)

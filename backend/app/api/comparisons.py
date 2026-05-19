@@ -77,6 +77,7 @@ def list_comparisons():
             # ── Stock identity ────────────────────────────────────────────
             "symbol":   stock.symbol,
             "name_en":  stock.name_en,
+            "name_ar":  stock.name_ar,
             "sector":   stock.sector.name_en,
             "peer_count": comp.peer_count,  # How many stocks were in the sector at calc time
 

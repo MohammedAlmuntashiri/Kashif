@@ -12,7 +12,7 @@ const fmtNum = (decimals) => (v) =>
 // in finance and aren't translated.
 const COLUMNS = [
   { key: 'symbol',         labelKey: 'cmp.col.ticker', fmt: (v) => v,   rankKey: null,                  avgKey: null },
-  { key: 'name_en',        labelKey: 'cmp.col.name',   fmt: (v) => v,   rankKey: null,                  avgKey: null },
+  { key: 'name',           labelKey: 'cmp.col.name',   fmt: (v) => v,   rankKey: null,                  avgKey: null },
   { key: 'sector',         labelKey: 'cmp.col.sector', fmt: (v) => v,   rankKey: null,                  avgKey: null, isSector: true },
   { key: 'pe_ratio',       label: 'P/E',               fmt: fmtNum(2),  rankKey: 'pe_rank',             avgKey: 'sector_avg_pe' },
   { key: 'pb_ratio',       label: 'P/B',               fmt: fmtNum(2),  rankKey: 'pb_rank',             avgKey: 'sector_avg_pb' },
@@ -31,8 +31,15 @@ function rankColorClass(rank, peerCount) {
 }
 
 export default function ComparisonTable({ rows }) {
-  const { t, tSector } = useLang();
+  const { t, tSector, lang } = useLang();
   const [sortBy, setSortBy] = useState({ key: 'symbol', direction: 'asc' });
+
+  // Build a `name` field per row that follows the current UI language.
+  // Falls back to English if the Arabic name is missing.
+  const localizedRows = useMemo(
+    () => rows.map((r) => ({ ...r, name: (lang === 'ar' && r.name_ar) ? r.name_ar : r.name_en })),
+    [rows, lang]
+  );
 
   const handleSort = (key) => {
     setSortBy((cur) =>
@@ -45,7 +52,7 @@ export default function ComparisonTable({ rows }) {
   const sortedRows = useMemo(() => {
     const { key, direction } = sortBy;
     const factor = direction === 'asc' ? 1 : -1;
-    return [...rows].sort((a, b) => {
+    return [...localizedRows].sort((a, b) => {
       const av = a[key];
       const bv = b[key];
       if (av === null || av === undefined) return 1;
@@ -53,7 +60,7 @@ export default function ComparisonTable({ rows }) {
       if (typeof av === 'string') return av.localeCompare(bv) * factor;
       return (av - bv) * factor;
     });
-  }, [rows, sortBy]);
+  }, [localizedRows, sortBy]);
 
   if (!rows || rows.length === 0) {
     return (
@@ -69,11 +76,16 @@ export default function ComparisonTable({ rows }) {
         <table className="min-w-full text-sm">
           <thead>
             <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-700">
-              {COLUMNS.map((col) => (
+              {COLUMNS.map((col) => {
+                // Ratio columns hold LTR numbers; force physical right so they
+                // line up with their cells in both LTR and RTL mode. Text
+                // columns follow page direction (text-end = end of line).
+                const align = col.rankKey ? 'text-right' : 'text-end';
+                return (
                 <th
                   key={col.key}
                   onClick={() => handleSort(col.key)}
-                  className="py-3 px-3 text-end text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/60 select-none whitespace-nowrap"
+                  className={`py-3 px-3 ${align} text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700/60 select-none whitespace-nowrap`}
                 >
                   {col.labelKey ? t(col.labelKey) : col.label}
                   {sortBy.key === col.key && (
@@ -82,7 +94,8 @@ export default function ComparisonTable({ rows }) {
                     </span>
                   )}
                 </th>
-              ))}
+                );
+              })}
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
@@ -119,13 +132,17 @@ export default function ComparisonTable({ rows }) {
                       formatted
                     );
 
+                  // Ratio cells: physical right so they align with the header
+                  // (which is also text-right) in both LTR and RTL.
+                  // Text cells: text-end follows page direction.
+                  const cellAlign = isRatio ? 'text-right' : 'text-end';
                   return (
                     <td
                       key={col.key}
                       title={title}
-                      // Numeric cells force LTR for stable column alignment.
+                      // Numeric cells force LTR so the digits don't flip in RTL.
                       dir={isRatio ? 'ltr' : undefined}
-                      className={`py-2.5 px-3 text-end tabular-nums whitespace-nowrap ${colorCls}`}
+                      className={`py-2.5 px-3 ${cellAlign} tabular-nums whitespace-nowrap ${colorCls}`}
                     >
                       {cellContent}
                     </td>

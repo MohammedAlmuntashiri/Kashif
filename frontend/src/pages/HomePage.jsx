@@ -1,6 +1,7 @@
 // Home / Dashboard page.
 
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
+import { usePolling } from '../hooks/usePolling.js';
 import { Link } from 'react-router-dom';
 import { TrendingUp, Layers, Briefcase, Newspaper, LineChart, Sparkles } from 'lucide-react';
 
@@ -10,6 +11,7 @@ import NewsList from '../components/news/NewsList.jsx';
 import { StockGridSkeleton } from '../components/common/Skeleton.jsx';
 import AnimatedCounter from '../components/common/AnimatedCounter.jsx';
 import HeroMesh from '../components/common/HeroMesh.jsx';
+import RecentlyViewedStrip from '../components/stocks/RecentlyViewedStrip.jsx';
 import { formatSAR } from '../utils/format.js';
 import { useLang } from '../i18n/LanguageContext.jsx';
 
@@ -18,14 +20,9 @@ const TASI = { value: 11_234.56, change: 0.84 };
 
 export default function HomePage() {
   const { t, tSector } = useLang();
-  const [stocks, setStocks] = useState(null);
-  const [error,  setError]  = useState(null);
-
-  useEffect(() => {
-    getStocks()
-      .then(setStocks)
-      .catch((e) => setError(e.message));
-  }, []);
+  // Live polling — refresh every 60s so prices and valuations on the home
+  // cards keep up with the scheduler's 10-min DB refreshes during market hours.
+  const { data: stocks, error } = usePolling(getStocks, 60_000);
 
   const sectorCounts = useMemo(() => {
     if (!stocks) return {};
@@ -113,6 +110,9 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* ── Recently viewed strip (browser-local, self-hides when empty) ── */}
+      <RecentlyViewedStrip />
+
       {/* ── Sectors band ─────────────────────────────────────── */}
       <section>
         <SectionHeader
@@ -146,28 +146,11 @@ export default function HomePage() {
       </section>
 
       {/* ── Stocks band ──────────────────────────────────────── */}
-      <section>
-        <SectionHeader
-          icon={LineChart}
-          title={t('home.section.stocks')}
-          subtitle={loading ? '' : t('home.section.stocksSub', { count: stocks.length })}
-        />
-
-        {loading ? (
-          <StockGridSkeleton count={8} />
-        ) : stocks.length === 0 ? (
-          <EmptyState
-            icon={Briefcase}
-            title={t('home.empty')}
-          />
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mt-4">
-            {stocks.map((stock) => (
-              <StockCard key={stock.symbol} stock={stock} />
-            ))}
-          </div>
-        )}
-      </section>
+      <StocksBand
+        loading={loading}
+        stocks={loading ? [] : stocks}
+        t={t}
+      />
 
       {/* ── News band ────────────────────────────────────────── */}
       <section>
@@ -213,6 +196,74 @@ function Kpi({ icon: Icon, label, value, numericValue, mono = false }) {
           : (value ?? '—')}
       </div>
     </div>
+  );
+}
+
+// Initial visible batch size + how many more "Load more" reveals each click.
+// Limiting initial render is the main perf win — 49 cards × (logo + sparkline)
+// was visibly choppy on low-end devices.
+const STOCKS_PAGE_SIZE = 12;
+
+function StocksBand({ loading, stocks, t }) {
+  const [visible, setVisible] = useState(STOCKS_PAGE_SIZE);
+
+  if (loading) {
+    return (
+      <section>
+        <SectionHeader
+          icon={LineChart}
+          title={t('home.section.stocks')}
+          subtitle=""
+        />
+        <StockGridSkeleton count={8} />
+      </section>
+    );
+  }
+  if (stocks.length === 0) {
+    return (
+      <section>
+        <SectionHeader
+          icon={LineChart}
+          title={t('home.section.stocks')}
+        />
+        <EmptyState icon={Briefcase} title={t('home.empty')} />
+      </section>
+    );
+  }
+
+  const shown = stocks.slice(0, visible);
+  const hasMore = visible < stocks.length;
+  const remaining = stocks.length - visible;
+
+  return (
+    <section>
+      <SectionHeader
+        icon={LineChart}
+        title={t('home.section.stocks')}
+        subtitle={t('home.section.stocksSub', { count: stocks.length })}
+      />
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mt-4">
+        {shown.map((stock) => (
+          <StockCard key={stock.symbol} stock={stock} />
+        ))}
+      </div>
+
+      {hasMore && (
+        <div className="mt-6 text-center">
+          <button
+            type="button"
+            onClick={() => setVisible((v) => v + STOCKS_PAGE_SIZE)}
+            className="px-5 py-2 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-sm font-medium text-slate-700 dark:text-slate-200 hover:border-brand-500 dark:hover:border-brand-500 hover:text-brand-600 dark:hover:text-brand-400 transition"
+          >
+            {t('home.loadMore', { n: Math.min(STOCKS_PAGE_SIZE, remaining) })}
+          </button>
+          <div className="text-xs text-slate-500 dark:text-slate-400 mt-2">
+            {t('home.stocksShown', { shown: visible, total: stocks.length })}
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
