@@ -39,6 +39,21 @@ module.exports = {
       boxShadow: {
         'brand-glow':      '0 0 0 1px rgba(16, 185, 129, 0.25), 0 8px 24px -8px rgba(16, 185, 129, 0.35)',
       },
+
+      // Keyframes powering skeleton shimmer + hero mesh drift.
+      keyframes: {
+        shimmer: {
+          '100%': { transform: 'translateX(100%)' },
+        },
+        'mesh-drift': {
+          '0%, 100%': { transform: 'translate3d(0,0,0) scale(1)' },
+          '50%':      { transform: 'translate3d(2%, -1%, 0) scale(1.05)' },
+        },
+      },
+      animation: {
+        shimmer:     'shimmer 1.6s infinite',
+        'mesh-drift':'mesh-drift 18s ease-in-out infinite',
+      },
     },
   },
 

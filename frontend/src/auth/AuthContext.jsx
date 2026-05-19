@@ -1,102 +1,92 @@
-// Mock auth context — frontend-only, localStorage-backed.
+// Auth context — backed by the Flask /api/auth/* endpoints.
 //
-// Accounts live in localStorage under `kashif.users` and the current
-// session under `kashif.session`. Passwords are SHA-256 hashed via
-// window.crypto.subtle before being stored — not a real security
-// guarantee (an attacker with localStorage access can replay the hash),
-// but at least we don't keep plain text.
+// On sign-in/sign-up the server returns a JWT + a public user object.
+// The token is stored in localStorage under `kashif.token` and the
+// session under `kashif.session` so the UI rehydrates instantly on
+// reload. On first mount we also call /api/auth/me to confirm the
+// token is still valid; if the server rejects it (expired, deleted
+// user), we sign out automatically.
 //
-// SWAP-OUT POINT: when the backend grows real auth, replace the body of
-// signIn / signUp / signOut with API calls. The shape returned by useAuth
-// (user, signIn, signUp, signOut, ready) should stay the same so no
-// pages need touching.
+// Public shape consumed by SignInPage, SignUpPage, UserMenu:
+//   { user, ready, signIn, signUp, signOut }
+// Error codes returned from the backend (NO_ACCOUNT, WRONG_PASSWORD,
+// EMAIL_TAKEN, INVALID_EMAIL, PASSWORD_TOO_SHORT, NAME_REQUIRED) are
+// thrown verbatim so the existing i18n keys keep working unchanged.
 
 import React, { createContext, useContext, useEffect, useState } from 'react';
 
-const USERS_KEY   = 'kashif.users';
+import { apiSignIn, apiSignUp, apiFetchMe } from '../services/api.js';
+
+const TOKEN_KEY   = 'kashif.token';
 const SESSION_KEY = 'kashif.session';
 
 const AuthContext = createContext(null);
 
-// ── Helpers ──────────────────────────────────────────────────────────
-const loadUsers = () => {
-  try   { return JSON.parse(localStorage.getItem(USERS_KEY) || '{}'); }
-  catch { return {}; }
-};
-const saveUsers = (u) => localStorage.setItem(USERS_KEY, JSON.stringify(u));
+// One-shot cleanup of the old localStorage-mock account store (passwords
+// hashed client-side). Real accounts live in Postgres now — sweep the
+// stale keys away so the browser's storage doesn't hold a dead password
+// hash forever.
+(function wipeLegacyMockUsers() {
+  try { localStorage.removeItem('kashif.users'); } catch (_) {}
+})();
 
-const loadSession = () => {
+const readSession = () => {
   try   { return JSON.parse(localStorage.getItem(SESSION_KEY) || 'null'); }
   catch { return null; }
 };
-const saveSession = (s) =>
+const writeSession = (s) =>
   s ? localStorage.setItem(SESSION_KEY, JSON.stringify(s))
     : localStorage.removeItem(SESSION_KEY);
+const writeToken = (t) =>
+  t ? localStorage.setItem(TOKEN_KEY, t)
+    : localStorage.removeItem(TOKEN_KEY);
 
-// SHA-256 hex digest via SubtleCrypto. Good enough for our mock-only
-// store; not a substitute for server-side bcrypt/argon2.
-async function hashPassword(password) {
-  const bytes = new TextEncoder().encode(password);
-  const buf   = await crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(buf))
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
-}
-
-const normalizeEmail = (e) => (e || '').trim().toLowerCase();
-
-// ── Provider ─────────────────────────────────────────────────────────
 export function AuthProvider({ children }) {
-  const [user,  setUser]  = useState(null);
+  // Show the cached session immediately for a snappier first paint;
+  // the /me call below will overwrite or clear it.
+  const [user,  setUser]  = useState(readSession);
   const [ready, setReady] = useState(false);
 
-  // Rehydrate session on first mount.
   useEffect(() => {
-    setUser(loadSession());
-    setReady(true);
+    let token = null;
+    try { token = localStorage.getItem(TOKEN_KEY); } catch (_) {}
+    if (!token) {
+      setReady(true);
+      return;
+    }
+    apiFetchMe()
+      .then(({ user: fresh }) => {
+        setUser(fresh);
+        writeSession(fresh);
+      })
+      .catch(() => {
+        // Token rejected — clear local state silently.
+        writeToken(null);
+        writeSession(null);
+        setUser(null);
+      })
+      .finally(() => setReady(true));
   }, []);
 
   const signUp = async ({ name, email, password }) => {
-    const cleanEmail = normalizeEmail(email);
-    if (!name?.trim())                throw new Error('NAME_REQUIRED');
-    if (!cleanEmail.includes('@'))    throw new Error('INVALID_EMAIL');
-    if (!password || password.length < 6) throw new Error('PASSWORD_TOO_SHORT');
-
-    const users = loadUsers();
-    if (users[cleanEmail]) throw new Error('EMAIL_TAKEN');
-
-    const hash = await hashPassword(password);
-    users[cleanEmail] = {
-      name:       name.trim(),
-      email:      cleanEmail,
-      passHash:   hash,
-      createdAt:  new Date().toISOString(),
-    };
-    saveUsers(users);
-
-    const session = { name: name.trim(), email: cleanEmail };
-    saveSession(session);
-    setUser(session);
-    return session;
+    const { token, user: u } = await apiSignUp({ name, email, password });
+    writeToken(token);
+    writeSession(u);
+    setUser(u);
+    return u;
   };
 
   const signIn = async ({ email, password }) => {
-    const cleanEmail = normalizeEmail(email);
-    const users = loadUsers();
-    const record = users[cleanEmail];
-    if (!record) throw new Error('NO_ACCOUNT');
-
-    const hash = await hashPassword(password || '');
-    if (hash !== record.passHash) throw new Error('WRONG_PASSWORD');
-
-    const session = { name: record.name, email: record.email };
-    saveSession(session);
-    setUser(session);
-    return session;
+    const { token, user: u } = await apiSignIn({ email, password });
+    writeToken(token);
+    writeSession(u);
+    setUser(u);
+    return u;
   };
 
   const signOut = () => {
-    saveSession(null);
+    writeToken(null);
+    writeSession(null);
     setUser(null);
   };
 

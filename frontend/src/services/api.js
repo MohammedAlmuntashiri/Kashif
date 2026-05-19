@@ -28,12 +28,23 @@ import {
 } from './finnhub.js';
 
 // ⚠️  Flip this to false when the real DB is populated.  ⚠️
-const USE_MOCKS = true;
+const USE_MOCKS = false;
 
 const api = axios.create({
   baseURL: '/api',
   timeout: 30000,                     // 30s — PDF upload + OCR can take a while
   headers: { 'Content-Type': 'application/json' },
+});
+
+// Inject the JWT (stored by AuthContext after sign-in) on every request.
+// We read it fresh per-request so a sign-in / sign-out is picked up
+// without recreating the axios instance.
+api.interceptors.request.use((cfg) => {
+  try {
+    const token = localStorage.getItem('kashif.token');
+    if (token) cfg.headers.Authorization = `Bearer ${token}`;
+  } catch (_) { /* localStorage blocked — fine */ }
+  return cfg;
 });
 
 // Helper: simulate axios's 404 error shape for mock-mode "not found".
@@ -156,5 +167,29 @@ export const getNews = async ({ ticker, limit } = {}) => {
   rows.sort(sortByPublished);
   return limit ? rows.slice(0, limit) : rows;
 };
+
+// ─── Auth ─────────────────────────────────────────────────────────────
+// Real backend endpoints, never mocked. Errors from the API come back as
+// { error: "NO_ACCOUNT" } etc. — we re-throw the code so AuthContext can
+// translate it via the existing i18n error map.
+function throwAuthError(err) {
+  const code = err?.response?.data?.error;
+  throw new Error(code || 'GENERIC');
+}
+
+export const apiSignUp = ({ name, email, password }) =>
+  api.post('/auth/signup', { name, email, password })
+     .then((r) => r.data)
+     .catch(throwAuthError);
+
+export const apiSignIn = ({ email, password }) =>
+  api.post('/auth/signin', { email, password })
+     .then((r) => r.data)
+     .catch(throwAuthError);
+
+export const apiFetchMe = () =>
+  api.get('/auth/me')
+     .then((r) => r.data)
+     .catch(throwAuthError);
 
 export default api;

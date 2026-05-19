@@ -57,6 +57,9 @@ export const translations = {
     'val.none':          'No valuation computed yet for this stock.',
     'val.calculated':    'Calculated',
     'val.source':        'source',
+    'val.model.dcf':     'DCF',
+    'val.model.pe':      'P/E',
+    'val.model.pb':      'P/B',
 
     // ── Gauge ──────────────────────────────────────────────
     'gauge.market':      'Market',
@@ -93,6 +96,7 @@ export const translations = {
     'up.extract':          'Extract',
     'up.extracting':       'Extracting…',
     'up.failed':           'Upload failed',
+    'up.toast.success':    'Extracted financials for {period}.',
     'up.extractedValues':  'Extracted values',
     'up.period':           'Period',
     'up.noDbRow':          'no DB row for this period',
@@ -158,7 +162,6 @@ export const translations = {
     'auth.signUp.busy':        'Creating account…',
     'auth.signUp.haveAccount': 'Already have an account?',
     'auth.signUp.signInLink':  'Sign in',
-    'auth.signUp.localOnly':   'Accounts are stored on this device only for now.',
 
     'auth.err.generic':           'Something went wrong. Please try again.',
     'auth.err.noAccount':         'No account found with that email.',
@@ -168,6 +171,10 @@ export const translations = {
     'auth.err.nameRequired':      'Please enter your name.',
     'auth.err.passwordTooShort':  'Password must be at least 6 characters.',
     'auth.err.passwordsMismatch': "Passwords don't match.",
+
+    'auth.toast.signedIn':        'Welcome back, {name}.',
+    'auth.toast.welcome':         'Account created — welcome, {name}.',
+    'auth.toast.signedOut':       'Signed out.',
 
     // ── About page ─────────────────────────────────────────
     'about.tagline':   'About Kashif',
@@ -254,6 +261,9 @@ export const translations = {
     'val.none':          'لم يتم احتساب تقييم لهذا السهم بعد.',
     'val.calculated':    'تاريخ الاحتساب',
     'val.source':        'المصدر',
+    'val.model.dcf':     'التدفقات المخصومة',
+    'val.model.pe':      'مكرر الربحية',
+    'val.model.pb':      'مكرر القيمة الدفترية',
 
     // ── Gauge ──────────────────────────────────────────────
     'gauge.market':      'السوق',
@@ -290,6 +300,7 @@ export const translations = {
     'up.extract':          'استخراج',
     'up.extracting':       'جارٍ الاستخراج…',
     'up.failed':           'فشل التحميل',
+    'up.toast.success':    'تم استخراج البيانات المالية للفترة {period}.',
     'up.extractedValues':  'القيم المستخرجة',
     'up.period':           'الفترة',
     'up.noDbRow':          'لا توجد بيانات في قاعدة البيانات لهذه الفترة',
@@ -355,7 +366,6 @@ export const translations = {
     'auth.signUp.busy':        'جارٍ إنشاء الحساب…',
     'auth.signUp.haveAccount': 'لديك حساب بالفعل؟',
     'auth.signUp.signInLink':  'سجّل الدخول',
-    'auth.signUp.localOnly':   'يتم حفظ الحسابات على هذا الجهاز فقط في الوقت الحالي.',
 
     'auth.err.generic':           'حدث خطأ ما. يرجى المحاولة مرة أخرى.',
     'auth.err.noAccount':         'لا يوجد حساب بهذا البريد الإلكتروني.',
@@ -365,6 +375,10 @@ export const translations = {
     'auth.err.nameRequired':      'يرجى إدخال الاسم.',
     'auth.err.passwordTooShort':  'كلمة المرور يجب أن تكون ٦ أحرف على الأقل.',
     'auth.err.passwordsMismatch': 'كلمتا المرور غير متطابقتين.',
+
+    'auth.toast.signedIn':        'أهلاً بعودتك يا {name}.',
+    'auth.toast.welcome':         'تم إنشاء الحساب — أهلاً يا {name}.',
+    'auth.toast.signedOut':       'تم تسجيل الخروج.',
 
     // ── About page ─────────────────────────────────────────
     'about.tagline':   'عن كاشف',
@@ -406,12 +420,29 @@ export const translations = {
 // Sector-name translations — kept separate because sector names arrive
 // from the backend as English strings, not translation keys.
 // If a sector isn't in the map, it falls back to the English name.
+// Keys must match the exact `name_en` strings the backend sends
+// (sourced from the `sectors` table — name_en column).
 export const sectorAr = {
-  'Banks':          'البنوك',
-  'Energy':         'الطاقة',
-  'Materials':      'المواد الأساسية',
-  'Telecom':        'الاتصالات',
-  'Food':           'الغذاء',
-  'Transportation': 'النقل',
-  'Real Estate':    'العقارات',
+  'Banks':                                        'البنوك',
+  'Capital Goods':                                'السلع الرأسمالية',
+  'Commercial & Professional Svc':                'الخدمات التجارية والمهنية',
+  'Consumer Discretionary Distribution & Retail': 'توزيع السلع الكمالية وتجزئتها',
+  'Consumer Durables & Apparel':                  'السلع طويلة الأجل',
+  'Consumer Services':                            'الخدمات الاستهلاكية',
+  'Consumer Staples Distribution & Retail':       'توزيع السلع الاستهلاكية وتجزئتها',
+  'Energy':                                       'الطاقة',
+  'Financial Services':                           'الخدمات المالية',
+  'Food & Beverages':                             'الأغذية والمشروبات',
+  'Health Care Equipment & Svc':                  'المعدات والخدمات الصحية',
+  'Household & Personal Products':                'المنتجات المنزلية والشخصية',
+  'Insurance':                                    'التأمين',
+  'Materials':                                    'المواد الأساسية',
+  'Media and Entertainment':                      'الإعلام والترفيه',
+  'Pharma, Biotech & Life Science':               'الأدوية والتكنولوجيا الحيوية وعلوم الحياة',
+  'Real Estate Mgmt & Dev\'t':                    'إدارة وتطوير العقارات',
+  'REITs':                                        'صناديق الاستثمار العقارية المتداولة',
+  'Software & Services':                          'البرمجيات والخدمات',
+  'Telecommunication Services':                   'الاتصالات',
+  'Transportation':                               'النقل',
+  'Utilities':                                    'المرافق العامة',
 };

@@ -4,7 +4,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 
 import { getStock } from '../services/api.js';
-import LoadingSpinner from '../components/common/LoadingSpinner.jsx';
+import { StockDetailSkeleton } from '../components/common/Skeleton.jsx';
 import ValuationBadge from '../components/common/ValuationBadge.jsx';
 import ValuationGauge from '../components/stocks/ValuationGauge.jsx';
 import FinancialTable from '../components/stocks/FinancialTable.jsx';
@@ -38,7 +38,7 @@ export default function StockDetailPage() {
       </div>
     );
   }
-  if (data === null) return <LoadingSpinner />;
+  if (data === null) return <StockDetailSkeleton />;
 
   const {
     symbol,
@@ -121,9 +121,9 @@ export default function StockDetailPage() {
             {/* Per-model breakdown — DCF / P/E / P/B side-by-side. */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-5">
               {[
-                { label: 'DCF', value: valuation.dcf_value },
-                { label: 'P/E', value: valuation.pe_value },
-                { label: 'P/B', value: valuation.pb_value },
+                { label: t('val.model.dcf'), value: valuation.dcf_value },
+                { label: t('val.model.pe'),  value: valuation.pe_value },
+                { label: t('val.model.pb'),  value: valuation.pb_value },
               ].map(({ label, value }) => (
                 <div
                   key={label}

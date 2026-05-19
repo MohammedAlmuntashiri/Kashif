@@ -5,9 +5,11 @@ import { Link } from 'react-router-dom';
 import { TrendingUp, Layers, Briefcase, Newspaper, LineChart, Sparkles } from 'lucide-react';
 
 import { getStocks } from '../services/api.js';
-import LoadingSpinner from '../components/common/LoadingSpinner.jsx';
 import StockCard from '../components/stocks/StockCard.jsx';
 import NewsList from '../components/news/NewsList.jsx';
+import { StockGridSkeleton } from '../components/common/Skeleton.jsx';
+import AnimatedCounter from '../components/common/AnimatedCounter.jsx';
+import HeroMesh from '../components/common/HeroMesh.jsx';
 import { formatSAR } from '../utils/format.js';
 import { useLang } from '../i18n/LanguageContext.jsx';
 
@@ -47,8 +49,8 @@ export default function HomePage() {
       </div>
     );
   }
-  if (stocks === null) return <LoadingSpinner />;
 
+  const loading = stocks === null;
   const tasiUp = TASI.change >= 0;
 
   return (
@@ -56,21 +58,8 @@ export default function HomePage() {
 
       {/* ── Hero band ────────────────────────────────────────── */}
       <section className="relative">
-        {/* Decorative dot-grid backdrop behind the hero only — masks to a
-            soft circle so it fades to the page edges. */}
-        <div
-          aria-hidden
-          className="absolute inset-x-0 -top-10 h-[420px] -z-10 opacity-60 dark:opacity-40"
-          style={{
-            backgroundImage:
-              'radial-gradient(circle at 1px 1px, rgba(16,185,129,0.25) 1px, transparent 0)',
-            backgroundSize: '22px 22px',
-            maskImage:
-              'radial-gradient(ellipse 60% 60% at 50% 35%, black 40%, transparent 75%)',
-            WebkitMaskImage:
-              'radial-gradient(ellipse 60% 60% at 50% 35%, black 40%, transparent 75%)',
-          }}
-        />
+        {/* Animated gradient mesh backdrop. */}
+        <HeroMesh />
 
         {/* TASI ticker chip — pinned top-right of hero. */}
         <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
@@ -108,17 +97,17 @@ export default function HomePage() {
           <Kpi
             icon={Briefcase}
             label={t('home.kpi.stocks')}
-            value={stocks.length}
+            numericValue={loading ? null : stocks.length}
           />
           <Kpi
             icon={Layers}
             label={t('home.kpi.sectors')}
-            value={Object.keys(sectorCounts).length}
+            numericValue={loading ? null : Object.keys(sectorCounts).length}
           />
           <Kpi
             icon={TrendingUp}
             label={t('home.kpi.revenue')}
-            value={formatSAR(totalRevenue)}
+            value={loading ? '—' : formatSAR(totalRevenue)}
             mono
           />
         </div>
@@ -132,18 +121,27 @@ export default function HomePage() {
           subtitle={t('home.section.sectorsSub')}
         />
         <div className="flex flex-wrap gap-2 mt-4">
-          {Object.entries(sectorCounts)
-            .sort((a, b) => b[1] - a[1])
-            .map(([sector, count]) => (
-              <Link
-                key={sector}
-                to={`/sector/${encodeURIComponent(sector)}`}
-                className="text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-brand-400 dark:hover:border-brand-500 hover:text-brand-700 dark:hover:text-brand-300 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-full transition font-medium"
-              >
-                {tSector(sector)}
-                <span className="text-slate-400 dark:text-slate-500 ms-1 tabular-nums">{count}</span>
-              </Link>
-            ))}
+          {loading ? (
+            Array.from({ length: 8 }).map((_, i) => (
+              <div
+                key={i}
+                className="h-7 w-24 rounded-full bg-slate-200/70 dark:bg-slate-800/60 animate-pulse"
+              />
+            ))
+          ) : (
+            Object.entries(sectorCounts)
+              .sort((a, b) => b[1] - a[1])
+              .map(([sector, count]) => (
+                <Link
+                  key={sector}
+                  to={`/sector/${encodeURIComponent(sector)}`}
+                  className="text-xs bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 hover:border-brand-400 dark:hover:border-brand-500 hover:text-brand-700 dark:hover:text-brand-300 text-slate-700 dark:text-slate-300 px-3 py-1.5 rounded-full transition font-medium"
+                >
+                  {tSector(sector)}
+                  <span className="text-slate-400 dark:text-slate-500 ms-1 tabular-nums">{count}</span>
+                </Link>
+              ))
+          )}
         </div>
       </section>
 
@@ -152,10 +150,12 @@ export default function HomePage() {
         <SectionHeader
           icon={LineChart}
           title={t('home.section.stocks')}
-          subtitle={t('home.section.stocksSub', { count: stocks.length })}
+          subtitle={loading ? '' : t('home.section.stocksSub', { count: stocks.length })}
         />
 
-        {stocks.length === 0 ? (
+        {loading ? (
+          <StockGridSkeleton count={8} />
+        ) : stocks.length === 0 ? (
           <EmptyState
             icon={Briefcase}
             title={t('home.empty')}
@@ -187,20 +187,30 @@ export default function HomePage() {
 
 // ── Sub-components ─────────────────────────────────────────────────
 
-function Kpi({ icon: Icon, label, value, mono = false }) {
+function Kpi({ icon: Icon, label, value, numericValue, mono = false }) {
+  const isNumeric = typeof numericValue === 'number' && Number.isFinite(numericValue);
   return (
-    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4 shadow-sm">
-      <div className="flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">
-        <Icon size={14} strokeWidth={2.5} className="text-brand-600 dark:text-brand-400" />
+    <div className="group relative overflow-hidden bg-white/70 dark:bg-slate-900/60 backdrop-blur-xl border border-white/60 dark:border-slate-800/80 rounded-2xl p-5 shadow-[0_8px_24px_-12px_rgba(15,23,42,0.18)] dark:shadow-[0_8px_24px_-12px_rgba(0,0,0,0.5)] hover:border-brand-400/70 dark:hover:border-brand-500/70 hover:shadow-brand-glow transition-all">
+      {/* Decorative emerald glow that slides in on hover */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -top-12 -end-12 w-32 h-32 rounded-full bg-brand-400/30 dark:bg-brand-500/20 blur-2xl opacity-0 group-hover:opacity-100 transition-opacity duration-500"
+      />
+      <div className="relative flex items-center gap-2 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wide">
+        <span className="flex items-center justify-center w-7 h-7 rounded-lg bg-brand-50 dark:bg-brand-950/50 text-brand-600 dark:text-brand-400 ring-1 ring-brand-200/60 dark:ring-brand-800/50">
+          <Icon size={14} strokeWidth={2.5} />
+        </span>
         {label}
       </div>
       <div
-        className={`mt-2 text-2xl sm:text-3xl font-bold text-slate-900 dark:text-slate-100 font-display ${
-          mono ? 'tabular-nums' : ''
+        className={`relative mt-3 text-3xl sm:text-4xl font-bold text-slate-900 dark:text-slate-100 font-display tracking-tight ${
+          mono || isNumeric ? 'tabular-nums' : ''
         }`}
-        dir={mono ? 'ltr' : undefined}
+        dir={mono || isNumeric ? 'ltr' : undefined}
       >
-        {value}
+        {isNumeric
+          ? <AnimatedCounter value={numericValue} />
+          : (value ?? '—')}
       </div>
     </div>
   );

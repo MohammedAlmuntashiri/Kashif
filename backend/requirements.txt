@@ -10,3 +10,5 @@ yfinance
 pdfplumber
 pdf2image
 pytesseract
+bcrypt
+PyJWT
